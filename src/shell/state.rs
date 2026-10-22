@@ -1,0 +1,404 @@
+//! Shell state machine. UI and window-manager notifications come in as
+//! [`Event`]s; the resulting work comes out as [`Effect`]s that the GTK side
+//! executes. Nothing here touches GTK or X11, so it is fully unit-tested.
+
+use crate::platform::{AppWindow, WindowId, WindowSnapshot};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Event {
+    Windows(WindowSnapshot),
+    StartButton,
+    DismissStartMenu,
+    Today,
+    Switch(WindowId),
+    CloseActive,
+    CloseAll,
+    ToggleKeyboard,
+    /// The keyboard reported its real visibility.
+    KeyboardVisible(bool),
+    Launch(String),
+    EndSession,
+    /// Applications did not all close in time; stay in the session.
+    EndSessionTimeout,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Effect {
+    ShowDesktop(bool),
+    Activate(WindowId),
+    Close(WindowId),
+    ShowStartMenu(bool),
+    Launch(String),
+    SetKeyboard(bool),
+    /// Arm the end-session timeout.
+    StartEndSessionTimer,
+    Quit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Today,
+    App(WindowId),
+}
+
+/// Shell-specific commands offered in the command bar for the current view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextAction {
+    Refresh,
+    CloseApp,
+    CancelMenu,
+}
+
+#[derive(Debug, Default)]
+pub struct ShellState {
+    windows: Vec<AppWindow>,
+    /// Most recently used first.
+    mru: Vec<WindowId>,
+    active: Option<WindowId>,
+    today: bool,
+    start_menu_open: bool,
+    keyboard_visible: bool,
+    ending_session: bool,
+}
+
+impl ShellState {
+    pub fn new() -> Self {
+        Self { today: true, ..Default::default() }
+    }
+
+    pub fn view(&self) -> View {
+        match self.active {
+            Some(id) if !self.today => View::App(id),
+            _ => View::Today,
+        }
+    }
+
+    pub fn start_menu_open(&self) -> bool {
+        self.start_menu_open
+    }
+
+    pub fn keyboard_visible(&self) -> bool {
+        self.keyboard_visible
+    }
+
+    pub fn ending_session(&self) -> bool {
+        self.ending_session
+    }
+
+    /// Windows for the switcher, most recently used first.
+    pub fn switcher_entries(&self) -> Vec<&AppWindow> {
+        self.mru.iter().filter_map(|id| self.window(*id)).collect()
+    }
+
+    pub fn window(&self, id: WindowId) -> Option<&AppWindow> {
+        self.windows.iter().find(|w| w.id == id)
+    }
+
+    pub fn title(&self) -> String {
+        if self.start_menu_open {
+            return "Start".into();
+        }
+        match self.view() {
+            View::Today => "Today".into(),
+            View::App(id) => self
+                .window(id)
+                .map(|w| w.display_title().to_string())
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn context_actions(&self) -> Vec<ContextAction> {
+        if self.start_menu_open {
+            return vec![ContextAction::CancelMenu];
+        }
+        match self.view() {
+            View::Today => vec![ContextAction::Refresh],
+            View::App(_) => vec![ContextAction::CloseApp],
+        }
+    }
+
+    pub fn handle(&mut self, event: Event) -> Vec<Effect> {
+        let mut fx = Vec::new();
+        match event {
+            Event::Windows(snap) => self.apply_snapshot(snap, &mut fx),
+            Event::StartButton => {
+                self.start_menu_open = !self.start_menu_open;
+                fx.push(Effect::ShowStartMenu(self.start_menu_open));
+            }
+            Event::DismissStartMenu => self.close_menu(&mut fx),
+            Event::Today => {
+                self.close_menu(&mut fx);
+                if !self.today {
+                    self.today = true;
+                    fx.push(Effect::ShowDesktop(true));
+                }
+            }
+            Event::Switch(id) => {
+                self.close_menu(&mut fx);
+                if self.window(id).is_some() {
+                    self.today = false;
+                    self.active = Some(id);
+                    self.touch(id);
+                    fx.push(Effect::Activate(id));
+                }
+            }
+            Event::CloseActive => {
+                if let View::App(id) = self.view() {
+                    fx.push(Effect::Close(id));
+                }
+            }
+            Event::CloseAll => {
+                fx.extend(self.windows.iter().map(|w| Effect::Close(w.id)));
+            }
+            Event::ToggleKeyboard => {
+                self.keyboard_visible = !self.keyboard_visible;
+                fx.push(Effect::SetKeyboard(self.keyboard_visible));
+            }
+            Event::KeyboardVisible(v) => self.keyboard_visible = v,
+            Event::Launch(app) => {
+                self.close_menu(&mut fx);
+                fx.push(Effect::Launch(app));
+            }
+            Event::EndSession => {
+                self.close_menu(&mut fx);
+                if self.windows.is_empty() {
+                    fx.push(Effect::Quit);
+                } else {
+                    // Ask every application to close the normal way, so each
+                    // one can offer to save. Only quit once they are all gone.
+                    self.ending_session = true;
+                    fx.extend(self.windows.iter().map(|w| Effect::Close(w.id)));
+                    fx.push(Effect::StartEndSessionTimer);
+                }
+            }
+            Event::EndSessionTimeout => self.ending_session = false,
+        }
+        fx
+    }
+
+    fn close_menu(&mut self, fx: &mut Vec<Effect>) {
+        if self.start_menu_open {
+            self.start_menu_open = false;
+            fx.push(Effect::ShowStartMenu(false));
+        }
+    }
+
+    fn touch(&mut self, id: WindowId) {
+        self.mru.retain(|w| *w != id);
+        self.mru.insert(0, id);
+    }
+
+    fn apply_snapshot(&mut self, snap: WindowSnapshot, fx: &mut Vec<Effect>) {
+        let new_windows: Vec<WindowId> = snap
+            .windows
+            .iter()
+            .filter(|w| self.window(w.id).is_none())
+            .map(|w| w.id)
+            .collect();
+
+        self.windows = snap.windows;
+        let alive = |id: &WindowId| self.windows.iter().any(|w| w.id == *id);
+        let mut mru: Vec<WindowId> = self.mru.iter().copied().filter(alive).collect();
+        for w in &self.windows {
+            if !mru.contains(&w.id) {
+                mru.push(w.id);
+            }
+        }
+        self.mru = mru;
+
+        self.active = snap.active.filter(alive);
+        if let Some(id) = self.active {
+            self.touch(id);
+        }
+        self.today = snap.showing_desktop || self.active.is_none();
+
+        // A window that appears while Today is showing was just opened by
+        // the user (from the shell or another app): bring it to the front.
+        if let Some(&newest) = new_windows.last() {
+            if self.today {
+                self.today = false;
+                self.active = Some(newest);
+                self.touch(newest);
+                fx.push(Effect::Activate(newest));
+            }
+        }
+
+        if self.ending_session && self.windows.is_empty() {
+            fx.push(Effect::Quit);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn win(id: u32, title: &str) -> AppWindow {
+        AppWindow { id: WindowId(id), title: title.into(), app_class: "App".into(), pid: None }
+    }
+
+    fn snap(windows: Vec<AppWindow>, active: Option<u32>, showing_desktop: bool) -> Event {
+        Event::Windows(WindowSnapshot { windows, active: active.map(WindowId), showing_desktop })
+    }
+
+    #[test]
+    fn starts_on_today() {
+        let s = ShellState::new();
+        assert_eq!(s.view(), View::Today);
+        assert_eq!(s.title(), "Today");
+        assert_eq!(s.context_actions(), vec![ContextAction::Refresh]);
+    }
+
+    #[test]
+    fn start_button_toggles_menu() {
+        let mut s = ShellState::new();
+        assert_eq!(s.handle(Event::StartButton), vec![Effect::ShowStartMenu(true)]);
+        assert!(s.start_menu_open());
+        assert_eq!(s.title(), "Start");
+        assert_eq!(s.context_actions(), vec![ContextAction::CancelMenu]);
+        assert_eq!(s.handle(Event::StartButton), vec![Effect::ShowStartMenu(false)]);
+        assert!(!s.start_menu_open());
+    }
+
+    #[test]
+    fn dismissing_a_closed_menu_does_nothing() {
+        let mut s = ShellState::new();
+        assert!(s.handle(Event::DismissStartMenu).is_empty());
+    }
+
+    #[test]
+    fn launch_closes_menu_and_launches() {
+        let mut s = ShellState::new();
+        s.handle(Event::StartButton);
+        assert_eq!(
+            s.handle(Event::Launch("mousepad.desktop".into())),
+            vec![Effect::ShowStartMenu(false), Effect::Launch("mousepad.desktop".into())]
+        );
+    }
+
+    #[test]
+    fn active_window_becomes_the_view() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, "notes.txt - Mousepad")], Some(1), false));
+        assert_eq!(s.view(), View::App(WindowId(1)));
+        assert_eq!(s.title(), "notes.txt - Mousepad");
+        assert_eq!(s.context_actions(), vec![ContextAction::CloseApp]);
+    }
+
+    #[test]
+    fn untitled_window_falls_back_to_class() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, " ")], Some(1), false));
+        assert_eq!(s.title(), "App");
+    }
+
+    #[test]
+    fn new_window_while_on_today_is_activated() {
+        let mut s = ShellState::new();
+        let fx = s.handle(snap(vec![win(7, "Thunar")], None, true));
+        assert_eq!(fx, vec![Effect::Activate(WindowId(7))]);
+        assert_eq!(s.view(), View::App(WindowId(7)));
+    }
+
+    #[test]
+    fn existing_windows_do_not_steal_today() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, "a")], Some(1), false));
+        s.handle(Event::Today);
+        let fx = s.handle(snap(vec![win(1, "a")], None, true));
+        assert!(fx.is_empty());
+        assert_eq!(s.view(), View::Today);
+    }
+
+    #[test]
+    fn today_shows_desktop_once() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, "a")], Some(1), false));
+        assert_eq!(s.handle(Event::Today), vec![Effect::ShowDesktop(true)]);
+        assert!(s.handle(Event::Today).is_empty());
+    }
+
+    #[test]
+    fn switch_activates_known_window_only() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, "a"), win(2, "b")], Some(2), false));
+        assert_eq!(s.handle(Event::Switch(WindowId(1))), vec![Effect::Activate(WindowId(1))]);
+        assert_eq!(s.view(), View::App(WindowId(1)));
+        assert!(s.handle(Event::Switch(WindowId(99))).is_empty());
+    }
+
+    #[test]
+    fn switcher_is_most_recently_used_first() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, "a"), win(2, "b"), win(3, "c")], Some(1), false));
+        s.handle(snap(vec![win(1, "a"), win(2, "b"), win(3, "c")], Some(3), false));
+        let ids: Vec<u32> = s.switcher_entries().iter().map(|w| w.id.0).collect();
+        assert_eq!(ids, vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn closed_windows_leave_the_switcher() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, "a"), win(2, "b")], Some(2), false));
+        s.handle(snap(vec![win(1, "a")], Some(1), false));
+        let ids: Vec<u32> = s.switcher_entries().iter().map(|w| w.id.0).collect();
+        assert_eq!(ids, vec![1]);
+    }
+
+    #[test]
+    fn last_window_closing_returns_to_today() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, "a")], Some(1), false));
+        s.handle(snap(vec![], None, false));
+        assert_eq!(s.view(), View::Today);
+    }
+
+    #[test]
+    fn close_active_only_in_app_view() {
+        let mut s = ShellState::new();
+        assert!(s.handle(Event::CloseActive).is_empty());
+        s.handle(snap(vec![win(4, "x")], Some(4), false));
+        assert_eq!(s.handle(Event::CloseActive), vec![Effect::Close(WindowId(4))]);
+    }
+
+    #[test]
+    fn keyboard_toggle_tracks_reported_state() {
+        let mut s = ShellState::new();
+        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true)]);
+        s.handle(Event::KeyboardVisible(false));
+        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true)]);
+    }
+
+    #[test]
+    fn end_session_without_apps_quits() {
+        let mut s = ShellState::new();
+        assert_eq!(s.handle(Event::EndSession), vec![Effect::Quit]);
+    }
+
+    #[test]
+    fn end_session_closes_apps_then_quits() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, "a"), win(2, "b")], Some(2), false));
+        assert_eq!(
+            s.handle(Event::EndSession),
+            vec![
+                Effect::Close(WindowId(1)),
+                Effect::Close(WindowId(2)),
+                Effect::StartEndSessionTimer
+            ]
+        );
+        assert!(s.handle(snap(vec![win(1, "a")], Some(1), false)).is_empty());
+        assert_eq!(s.handle(snap(vec![], None, false)), vec![Effect::Quit]);
+    }
+
+    #[test]
+    fn end_session_timeout_keeps_the_session() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, "unsaved")], Some(1), false));
+        s.handle(Event::EndSession);
+        s.handle(Event::EndSessionTimeout);
+        assert!(!s.ending_session());
+        // Closing the app later is not mistaken for the end of the session.
+        assert!(s.handle(snap(vec![], None, false)).is_empty());
+    }
+}

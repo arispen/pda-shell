@@ -1,0 +1,6 @@
+Shopping
+- milk
+- coffee
+
+Ideas for the PDA:
+- stylus-first shell

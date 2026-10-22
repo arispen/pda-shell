@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Openbox configuration for the pda-shell session.
+
+  Openbox does the window management; pda-shell only reserves screen edges
+  (EWMH struts) and sends standard EWMH requests. The application rules below
+  make ordinary application windows fill the work area left between the
+  shell's bars, without title bars (the shell shows the title and a close
+  command instead). Dialogs keep their decorations so they can be moved.
+-->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <resistance><strength>0</strength><screen_edge_strength>0</screen_edge_strength></resistance>
+  <focus>
+    <focusNew>yes</focusNew>
+    <followMouse>no</followMouse>
+    <focusLast>yes</focusLast>
+  </focus>
+  <placement><policy>Smart</policy><center>yes</center></placement>
+  <theme>
+    <name>Clearlooks</name>
+    <titleLayout>LC</titleLayout>
+    <keepBorder>no</keepBorder>
+    <animateIconify>no</animateIconify>
+    <font place="ActiveWindow"><name>DejaVu Sans</name><size>8</size><weight>bold</weight></font>
+    <font place="InactiveWindow"><name>DejaVu Sans</name><size>8</size><weight>bold</weight></font>
+  </theme>
+  <desktops><number>1</number><firstdesk>1</firstdesk><popupTime>0</popupTime></desktops>
+  <resize><drawContents>yes</drawContents><popupShow>Never</popupShow></resize>
+  <margins><top>0</top><bottom>0</bottom><left>0</left><right>0</right></margins>
+  <dock><noStrut>no</noStrut><autoHide>no</autoHide></dock>
+
+  <!-- No keyboard shortcuts: the device has no physical keyboard and the
+       developer's keyboard must not trigger window-manager actions. -->
+  <keyboard><chainQuitKey>C-g</chainQuitKey></keyboard>
+
+  <mouse>
+    <dragThreshold>8</dragThreshold>
+    <doubleClickTime>400</doubleClickTime>
+    <!-- No "Frame" bindings: an unmodified Frame binding grabs every click
+         on every window, so the shell's bars would never receive presses. -->
+    <context name="Client">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Middle" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Right" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+    </context>
+    <context name="Titlebar">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Left" action="Drag"><action name="Move"/></mousebind>
+    </context>
+    <context name="Close">
+      <mousebind button="Left" action="Click"><action name="Close"/></mousebind>
+    </context>
+    <context name="Desktop">
+      <mousebind button="Left" action="Press"><action name="Focus"/></mousebind>
+    </context>
+  </mouse>
+
+  <menu><file>menu.xml</file><hideDelay>0</hideDelay></menu>
+
+  <applications>
+    <!-- Ordinary application windows: one maximized app at a time. -->
+    <application type="normal">
+      <decor>no</decor>
+      <maximized>yes</maximized>
+      <desktop>all</desktop>
+    </application>
+    <!-- The shell's own windows place and size themselves. GTK 4 sets the
+         WM_CLASS class to the program name, so it is lowercase. -->
+    <application class="pda-shell">
+      <decor>no</decor>
+      <maximized>no</maximized>
+      <focus>yes</focus>
+    </application>
+    <application class="Onboard">
+      <decor>no</decor>
+      <maximized>no</maximized>
+      <focus>no</focus>
+    </application>
+  </applications>
+</openbox_config>

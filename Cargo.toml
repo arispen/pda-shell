@@ -1,0 +1,22 @@
+[package]
+name = "pda-shell"
+version = "0.1.0"
+edition = "2021"
+description = "Stylus-first Pocket PC style shell for desktop Linux (POC)"
+license = "MIT OR Apache-2.0"
+# Debian 13 ships rustc 1.85; stay buildable with the distribution toolchain.
+rust-version = "1.85"
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }
+glib = "0.21"
+gdk4-x11 = { version = "0.10", features = ["v4_4"] }
+x11rb = { version = "0.13", default-features = false }
+async-channel = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+log = "0.4"
+env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
+
+[profile.release]
+lto = "thin"

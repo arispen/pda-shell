@@ -1,0 +1,4 @@
+target/
+.dev-session/
+screenshots/smoke/
+screenshots/dev/

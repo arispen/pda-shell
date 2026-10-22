@@ -1,0 +1,5 @@
+Item,Qty,Price
+Stylus,2,4.50
+Screen protector,1,7.90
+Case,1,12.00
+Total,,=SUM(C2:C4)
