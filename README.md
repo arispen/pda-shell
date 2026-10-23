@@ -54,7 +54,7 @@ A Debian 13 container built from the same setup script:
 ./scripts/container.sh build                  # build the image
 ./scripts/container.sh cargo test             # unit + integration tests
 ./scripts/container.sh ./scripts/smoke-test.sh
-./scripts/container.sh vnc portrait           # then open vnc://localhost:5900
+./scripts/container.sh vnc portrait           # then open vnc://localhost:5900 (password: pda)
 ```
 
 ## Tests
