@@ -88,17 +88,24 @@ fi
 SESSION_ROOT="$REPO/.dev-session"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 LOG_DIR="$SESSION_ROOT/logs/$STAMP-$ORIENTATION"
-SESSION_HOME="${SESSION_HOME:-$SESSION_ROOT/home}"
-case "$SESSION_HOME" in /*) ;; *) SESSION_HOME="$PWD/$SESSION_HOME" ;; esac
+# Canonical path (no "//", ".", ".." or symlinks), so the guard below cannot
+# be bypassed by spelling the same directory differently.
+SESSION_HOME="$(realpath -m -- "${SESSION_HOME:-$SESSION_ROOT/home}")"
+if [ "$RESET_HOME" -eq 1 ]; then
+    # Never delete the root, the real home, the checkout, or a directory
+    # that contains either of them.
+    for keep in "$(realpath -m -- "${HOME:-/}")" "$(realpath -m -- "$REPO")"; do
+        case "$keep/" in
+            "$SESSION_HOME"/*|"$SESSION_HOME"/)
+                echo "refusing to delete $SESSION_HOME: it is or contains $keep" >&2; exit 2 ;;
+        esac
+    done
+    [ "$SESSION_HOME" = / ] && { echo "refusing to delete /" >&2; exit 2; }
+    rm -rf -- "$SESSION_HOME"
+fi
 # Sockets need a local file system with Unix permissions, so the runtime
 # directory lives in /tmp rather than in the (possibly shared) checkout.
 RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pda-shell-run.XXXXXX")"
-if [ "$RESET_HOME" -eq 1 ]; then
-    case "$SESSION_HOME" in
-        /|"$HOME"|"$HOME"/) echo "refusing to delete $SESSION_HOME" >&2; exit 2 ;;
-    esac
-    rm -rf "$SESSION_HOME"
-fi
 mkdir -p "$LOG_DIR" "$SESSION_HOME"
 ln -sfn "$LOG_DIR" "$SESSION_ROOT/logs/latest"
 
