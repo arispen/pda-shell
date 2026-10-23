@@ -6,6 +6,7 @@
 #   ./scripts/container.sh cargo test
 #   ./scripts/container.sh ./scripts/smoke-test.sh
 #   ./scripts/container.sh vnc portrait          # session viewable on vnc://localhost:5900
+#                                                # (password "pda", or $PDA_VNC_PASSWORD)
 #   ./scripts/container.sh                       # interactive shell
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,9 +24,11 @@ if [ "${1:-}" = "vnc" ]; then
     # The port is published on the host loopback only (127.0.0.1).
     # Xvfb plays the role of the developer's desktop; the nested Xephyr
     # session runs inside it exactly as it would on a Debian workstation.
-    exec "${run[@]}" -p 127.0.0.1:5900:5900 "$IMAGE" bash -c "
+    # macOS Screen Sharing refuses servers without a password, hence one.
+    exec "${run[@]}" -p 127.0.0.1:5900:5900 -e PDA_VNC_PASSWORD="${PDA_VNC_PASSWORD:-pda}" "$IMAGE" bash -c "
         Xvfb :1 -screen 0 1280x1100x24 -nolisten tcp & sleep 1
-        x11vnc -display :1 -forever -nopw -quiet -rfbport 5900 -o /tmp/x11vnc.log &
+        mkdir -p /tmp/vnc && x11vnc -storepasswd \"\$PDA_VNC_PASSWORD\" /tmp/vnc/passwd >/dev/null 2>&1
+        x11vnc -display :1 -forever -rfbauth /tmp/vnc/passwd -quiet -rfbport 5900 -o /tmp/x11vnc.log &
         DISPLAY=:1 ./scripts/dev-session.sh --orientation $orientation"
 fi
 
