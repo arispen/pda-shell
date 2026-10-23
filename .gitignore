@@ -2,3 +2,6 @@ target/
 .dev-session/
 screenshots/smoke/
 screenshots/dev/
+screenshots/workflow/
+screenshots/workflow-*/
+__pycache__/

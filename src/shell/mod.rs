@@ -11,6 +11,7 @@ use crate::keyboard::Keyboard;
 use crate::platform::x11::{self, gtk_glue, X11};
 use crate::platform::{SurfaceRole, WindowId, WindowSystem};
 use crate::ui::command_bar::{CommandBar, SwitcherEntry};
+use crate::ui::escape::FullscreenEscape;
 use crate::ui::start_menu::StartMenu;
 use crate::ui::status_bar::StatusBar;
 use crate::ui::today::Today;
@@ -54,6 +55,7 @@ pub struct Shell {
     command: Rc<CommandBar>,
     today: Rc<Today>,
     start: Rc<StartMenu>,
+    escape: Rc<FullscreenEscape>,
     keyboard: RefCell<Keyboard>,
     menu_closed_at: Cell<Option<Instant>>,
     dispatch: Dispatch,
@@ -93,19 +95,23 @@ impl Shell {
         let command = CommandBar::new(app, &layout, &x11, &cfg, dispatch.clone());
         let today = Today::new(app, &layout, &x11, &cfg, dispatch.clone());
         let start = StartMenu::new(app, &layout, &x11, &cfg, dispatch.clone(), shortcuts.clone());
-        let keyboard = RefCell::new(Keyboard::new(cfg.keyboard.command.clone(), &layout));
+        let escape = FullscreenEscape::new(app, &layout, &x11, &cfg, dispatch.clone());
+        let d = dispatch.clone();
+        let on_keyboard_visible: Rc<dyn Fn(bool)> = Rc::new(move |v| d(Command::Shell(Event::KeyboardVisible(v))));
+        let keyboard = RefCell::new(Keyboard::new(cfg.keyboard.clone(), &layout, on_keyboard_visible));
 
         let shell = Rc::new(Self {
             app: app.clone(),
             layout,
             x11,
-            state: RefCell::new(ShellState::new()),
+            state: RefCell::new(ShellState::with_fullscreen_mode(cfg.windows.fullscreen)),
             apps: RefCell::new(Vec::new()),
             shortcuts,
             status,
             command,
             today,
             start,
+            escape,
             keyboard,
             menu_closed_at: Cell::new(None),
             dispatch,
@@ -130,7 +136,8 @@ impl Shell {
         shell.command.win.window.present();
         shell.refresh_ui();
 
-        let rx = x11::spawn_watcher(std::process::id()).map_err(|e| format!("window watcher: {e}"))?;
+        let rx = x11::spawn_watcher(std::process::id(), cfg.windows.fit_dialogs)
+            .map_err(|e| format!("window watcher: {e}"))?;
         let w = Rc::downgrade(&shell);
         glib::spawn_future_local(async move {
             while let Ok(snap) = rx.recv().await {
@@ -205,9 +212,11 @@ impl Shell {
             Command::AddShortcut(id) => self.edit_shortcuts(|s| shortcuts::add(s, &id)),
             Command::RemoveShortcut(id) => self.edit_shortcuts(|s| shortcuts::remove(s, &id)),
             Command::ForgetRecent(uri) => {
+                // Documents found in ~/Documents are not in the recent list.
                 if let Err(e) = gtk::RecentManager::default().remove_item(&uri) {
-                    log::warn!("cannot remove {uri} from recent documents: {e}");
+                    log::debug!("{uri} is not a recent document: {e}");
                 }
+                self.today.forget(&uri);
             }
             Command::Refresh => {
                 self.reload_apps();
@@ -226,10 +235,15 @@ impl Shell {
     }
 
     fn handle(&self, ev: Event) {
+        let was_today = self.state.borrow().view() == View::Today;
         let effects = self.state.borrow_mut().handle(ev);
         for fx in effects {
             log::debug!("effect {fx:?}");
             self.run(fx);
+        }
+        // Documents saved while a program was in front show up on return.
+        if !was_today && self.state.borrow().view() == View::Today {
+            self.today.refresh_recent();
         }
         self.refresh_ui();
     }
@@ -239,6 +253,7 @@ impl Shell {
             Effect::ShowDesktop(on) => self.x11.show_desktop(on),
             Effect::Activate(id) => self.x11.activate(id),
             Effect::Close(id) => self.x11.close(id),
+            Effect::SetFullscreen(id, on) => self.x11.set_fullscreen(id, on),
             Effect::ShowStartMenu(true) => self.start.show(),
             Effect::ShowStartMenu(false) => {
                 self.menu_closed_at.set(Some(Instant::now()));
@@ -249,9 +264,14 @@ impl Shell {
                     log::error!("cannot launch {id}: {e}");
                 }
             }
-            Effect::SetKeyboard(visible) => {
-                self.keyboard.borrow_mut().set_visible(visible);
+            Effect::SetKeyboard(visible) => self.keyboard.borrow_mut().set_visible(visible),
+            Effect::ReserveKeyboard(visible) => {
                 let extra = if visible { self.keyboard.borrow().rect().height } else { 0 };
+                // Today and the Start menu shrink like applications do, so
+                // the keyboard never covers their lower part (End session).
+                let shrink = |r: layout::Rect| layout::Rect { height: r.height.saturating_sub(extra), ..r };
+                self.today.win.set_rect(shrink(self.layout.workarea));
+                self.start.win.set_rect(shrink(self.layout.start_menu));
                 if let Some(xid) = gtk_glue::xid(self.command.win.window.upcast_ref()) {
                     if let Err(e) = self.x11.reserve(xid, SurfaceRole::BottomPanel, self.layout.bottom_bar, extra) {
                         log::warn!("cannot reserve keyboard space: {e}");
@@ -278,21 +298,27 @@ impl Shell {
         self.status.set_start_open(st.start_menu_open());
         self.command.set_context_actions(&st.context_actions());
         self.command.set_keyboard_visible(st.keyboard_visible());
+        self.escape.set_visible(st.fullscreen_escape());
         let active = match st.view() {
             View::App(id) => Some(id),
             View::Today => None,
         };
         let apps = self.apps.borrow();
-        let entries = st
+        let entries: Vec<SwitcherEntry> = st
             .switcher_entries()
             .into_iter()
-            .map(|w| SwitcherEntry {
-                id: w.id,
-                title: w.display_title().to_string(),
-                icon: apps::for_window_class(&apps, &w.app_class).and_then(apps::gicon),
-                active: Some(w.id) == active,
+            .map(|w| {
+                let entry = apps::for_window_class(&apps, &w.app_class);
+                SwitcherEntry {
+                    id: w.id,
+                    title: w.display_title().to_string(),
+                    program: entry.map_or_else(|| w.app_class.clone(), |e| e.name.clone()),
+                    icon: entry.and_then(apps::gicon),
+                    active: Some(w.id) == active,
+                }
             })
             .collect();
+        self.today.set_running(&entries);
         self.command.set_windows(entries);
     }
 }

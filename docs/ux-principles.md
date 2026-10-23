@@ -35,13 +35,16 @@ persistent navigation and stylus interaction model, not its look.
 | Start button, top left | Start flag | opens a drop-down menu: search, programs, Today / Keyboard / End session |
 | Title in the top bar | active program title | live `_NET_WM_NAME` of the active window |
 | Clock, top right | clock | tapping it returns to Today |
-| Today screen | Today | date/time, program shortcuts, recent documents, system info |
+| Today screen | Today | date first, then recent documents, open programs, program shortcuts, system info |
 | Bottom command bar | menu bar + SIP button | Today, running-program switcher, shell context actions, keyboard toggle |
 | Tap-and-hold ring of dots | tap-and-hold | same idea: dots fill in for 600 ms, then the context menu |
 
-Portrait: Start menu uses the full width; Today stacks Programs, Recent
-documents, System. Landscape: Start menu is a 300 px column so the program
-stays visible beside it; Today puts recent documents beside the shortcuts.
+Portrait: Start menu uses the full width; Today stacks Recent documents,
+Open programs, Programs, System. Landscape: Start menu is a 300 px column so
+the program stays visible beside it; Today puts documents and open programs
+on the left, shortcuts and system information on the right. The Start menu
+lists user programs; settings dialogs and technical utilities are behind
+"Other programs and settings" and in search results.
 
 ## Interaction model
 
@@ -60,7 +63,9 @@ One set of tokens (`[design]`, `[colors]` in `config/pda-shell.toml`) drives
 the generated stylesheet (`ui::stylesheet`): one font family, two text sizes,
 16 px icons in bars and lists, 24 px icons on Today, 2–4 px spacing, 2 px
 radius, dark blue bars with white text, white surfaces, a blue accent for
-selection and an orange focus/feedback colour. No animations.
+selection and an orange focus/feedback colour. No animations. Density
+profiles (compact, balanced, readable) scale text, rows, targets, icons and
+bars independently; see [ergonomics.md](ergonomics.md).
 
 Windows Mobile provides inspiration only: no proprietary assets, logos or
 colours are used.

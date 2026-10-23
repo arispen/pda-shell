@@ -7,7 +7,7 @@ use pda_shell::platform::{AppWindow, WindowId, WindowSnapshot};
 use pda_shell::shell::state::{Effect, Event, ShellState, View};
 
 fn win(id: u32, title: &str, class: &str) -> AppWindow {
-    AppWindow { id: WindowId(id), title: title.into(), app_class: class.into(), pid: Some(id) }
+    AppWindow { id: WindowId(id), title: title.into(), app_class: class.into(), pid: Some(id), fullscreen: false }
 }
 
 fn windows(list: &[&AppWindow], active: Option<u32>, showing_desktop: bool) -> Event {
@@ -38,7 +38,8 @@ fn files_spreadsheet_editor_today_round_trip() {
 
     // Keyboard on, edit, keyboard off.
     assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true)]);
-    assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(false)]);
+    assert_eq!(s.handle(Event::KeyboardVisible(true)), vec![Effect::ReserveKeyboard(true)]);
+    assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(false), Effect::ReserveKeyboard(false)]);
 
     // Start Mousepad; it appears while an app is in front and is focused by
     // the window manager itself.

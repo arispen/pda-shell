@@ -1,6 +1,7 @@
 //! GTK user interface of the shell.
 
 pub mod command_bar;
+pub mod escape;
 pub mod start_menu;
 pub mod status_bar;
 pub mod today;
@@ -43,7 +44,7 @@ window.pda image {{ -gtk-icon-size: {icon}px; }}
 window.bar {{ background: {bar_bg}; color: {bar_fg}; }}
 window.bar button, window.bar menubutton > button {{
     background: transparent; color: {bar_fg}; border: none;
-    padding: 0 {pad}px; margin: 0;
+    padding: 0 {pad}px; margin: 0; min-width: {target}px;
 }}
 window.bar button:hover {{ background: {bar_hover}; }}
 window.bar button:active, window.bar button:checked, window.bar button.open {{ background: {bar_pressed}; }}
@@ -55,7 +56,9 @@ window.bar separator {{ background: {bar_hover}; min-width: 1px; margin: 3px 1px
 /* Today */
 window.today {{ background: {surface}; }}
 .today-header {{ background: {surface_alt}; border-bottom: 1px solid {border}; padding: {pad}px; }}
-.today-header .date {{ font-weight: bold; font-size: {title_px}px; }}
+.today-header .date {{ font-weight: bold; font-size: {date_px}px; }}
+.today-header .time {{ font-size: {date_px}px; }}
+.today-header .summary {{ color: {text_dim}; }}
 .shortcut {{ padding: {pad}px 1px; border: none; background: transparent; }}
 .shortcut image {{ -gtk-icon-size: {today_icon}px; }}
 .shortcut:hover {{ background: {surface_alt}; }}
@@ -63,7 +66,13 @@ window.today {{ background: {surface}; }}
 
 /* Lists (recent documents, Start menu, switcher) */
 list.compact, list.compact row {{ background: transparent; }}
-list.compact row {{ padding: 1px {pad}px; min-height: 0; border-radius: 0; }}
+list.compact row {{ padding: 1px {pad}px; min-height: {row}px; border-radius: 0; }}
+list.targets row {{ min-height: {target}px; }}
+list.compact row.destructive label, list.compact row.destructive image {{ color: #b3261e; }}
+list.compact row.destructive.armed {{ background: #b3261e; }}
+list.compact row.destructive.armed label, list.compact row.destructive.armed image {{ color: #ffffff; }}
+list.compact row .active-marker {{ color: {accent}; font-weight: bold; }}
+list.compact row.more label {{ color: {accent}; }}
 list.compact row:hover {{ background: {surface_alt}; }}
 list.compact row:selected, list.compact row:active {{ background: {accent}; color: {accent_fg}; }}
 list.compact row:selected .dim, list.compact row:active .dim {{ color: {accent_fg}; }}
@@ -86,12 +95,22 @@ popover.pda > contents {{
 popover.pda, popover.pda * {{ font-family: "{font}"; font-size: {font_px}px; }}
 window.bar popover.pda label, window.bar popover.pda image {{ color: {text}; }}
 window.bar popover.pda row:selected label, window.bar popover.pda row:active label {{ color: {accent_fg}; }}
-popover.pda modelbutton {{ min-height: 0; padding: 2px {pad}px; }}
+popover.pda modelbutton {{ min-height: {target}px; padding: 0 {pad}px; }}
+popover.pda separator {{ margin: 2px 0; }}
+
+/* Exit full screen: unmanaged, above full-screen programs */
+window.escape {{ background: {bar_bg}; }}
+window.escape button {{ background: {bar_bg}; color: {bar_fg}; border: 1px solid {bar_fg}; padding: 0 {pad}px; }}
+window.escape button:active {{ background: {bar_pressed}; }}
+window.escape label, window.escape image {{ color: {bar_fg}; }}
 "#,
         font = d.font_family,
         font_px = d.font_px,
         small_px = d.small_font_px,
         title_px = d.title_font_px,
+        date_px = d.date_font_px,
+        row = d.row_px,
+        target = d.target_px,
         pad = d.padding_px,
         radius = d.radius_px,
         icon = d.icon_px,
@@ -129,6 +148,8 @@ pub struct ShellWindow {
     pub window: gtk::ApplicationWindow,
     pub overlay: gtk::Overlay,
     pub feedback: StylusFeedback,
+    x11: Rc<X11>,
+    rect: std::rc::Rc<std::cell::Cell<Rect>>,
 }
 
 impl ShellWindow {
@@ -156,6 +177,7 @@ impl ShellWindow {
         let feedback = StylusFeedback::new(cfg);
         overlay.add_overlay(feedback.widget());
         window.set_child(Some(&overlay));
+        let current = std::rc::Rc::new(std::cell::Cell::new(rect));
 
         let x = x11.clone();
         window.connect_realize(move |w| match gtk_glue::xid(w.upcast_ref()) {
@@ -168,15 +190,29 @@ impl ShellWindow {
         });
         // The window manager may place the window itself when mapping it;
         // put it back where the layout wants it.
-        let x = x11.clone();
+        let (x, r) = (x11.clone(), current.clone());
         window.connect_map(move |w| {
             if let Some(xid) = gtk_glue::xid(w.upcast_ref()) {
-                if let Err(e) = x.place(xid, rect) {
+                if let Err(e) = x.place(xid, r.get()) {
                     log::warn!("cannot place window: {e}");
                 }
             }
         });
-        Self { window, overlay, feedback }
+        Self { window, overlay, feedback, x11: x11.clone(), rect: current }
+    }
+
+    /// Move and resize the surface, e.g. to keep it clear of the on-screen
+    /// keyboard.
+    pub fn set_rect(&self, rect: Rect) {
+        if self.rect.replace(rect) == rect {
+            return;
+        }
+        self.window.set_default_size(rect.width as i32, rect.height as i32);
+        if let Some(xid) = gtk_glue::xid(self.window.upcast_ref()) {
+            if let Err(e) = self.x11.place(xid, rect) {
+                log::warn!("cannot resize window: {e}");
+            }
+        }
     }
 
     pub fn set_content(&self, child: &impl IsA<gtk::Widget>) {
@@ -250,8 +286,10 @@ mod tests {
         let mut cfg = Config::default();
         cfg.design.font_px = 13;
         cfg.colors.bar_bg = "#123456".into();
+        cfg.design.target_px = 37;
         let css = stylesheet(&cfg);
         assert!(css.contains("font-size: 13px"));
+        assert!(css.contains("min-height: 37px"));
         assert!(css.contains("background: #123456"));
         assert!(!css.contains("{font"), "unformatted placeholder left in CSS");
     }

@@ -56,6 +56,36 @@ impl AppEntry {
     }
 }
 
+/// Desktop categories of settings dialogs and other configuration tools.
+const SETTINGS_CATEGORIES: &[&str] = &["Settings", "DesktopSettings", "X-XFCE-SettingsDialog", "X-XFCE-PersonalSettings"];
+
+/// `*` matches any run of characters; everything else literally.
+pub fn glob_match(pattern: &str, text: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == text;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !text.starts_with(first) || !text[first.len()..].ends_with(last) || text.len() < first.len() + last.len() {
+        return false;
+    }
+    let mut rest = &text[first.len()..text.len() - last.len()];
+    for part in &parts[1..parts.len() - 1] {
+        match rest.find(part) {
+            Some(i) => rest = &rest[i + part.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
+/// Whether an entry is a technical utility or settings dialog that the
+/// default program list leaves out (`hidden`: configured ID patterns).
+pub fn is_technical(entry: &AppEntry, hidden: &[String]) -> bool {
+    hidden.iter().any(|p| glob_match(p, &entry.id))
+        || entry.categories.iter().any(|c| SETTINGS_CATEGORIES.contains(&c.as_str()))
+}
+
 /// Entries matching `query`, best first; ties sorted by name.
 pub fn search<'a>(apps: &'a [AppEntry], query: &str) -> Vec<&'a AppEntry> {
     let mut hits: Vec<(u32, &AppEntry)> =
@@ -217,6 +247,28 @@ mod tests {
         assert_eq!(id("Xfce4-terminal"), Some("xfce4-terminal.desktop"));
         assert_eq!(id("Unknown"), None);
         assert_eq!(id(""), None);
+    }
+
+    #[test]
+    fn glob_patterns() {
+        assert!(glob_match("openbox.desktop", "openbox.desktop"));
+        assert!(!glob_match("openbox.desktop", "xopenbox.desktop"));
+        assert!(glob_match("python3*.desktop", "python3.13.desktop"));
+        assert!(glob_match("display-im*.desktop", "display-im7.q16.desktop"));
+        assert!(!glob_match("python3*.desktop", "python2.desktop"));
+        assert!(glob_match("*settings*", "thunar-settings.desktop"));
+        assert!(!glob_match("a*a", "a"));
+    }
+
+    #[test]
+    fn technical_utilities_are_filtered() {
+        let hidden = vec!["openbox.desktop".to_string(), "python3*.desktop".to_string()];
+        let c = catalog();
+        assert!(c.iter().all(|a| !is_technical(a, &hidden)), "ordinary programs stay");
+        assert!(is_technical(&app("python3.13.desktop", "Python (v3.13)", "", &[], &["Development"]), &hidden));
+        assert!(is_technical(&app("openbox.desktop", "Openbox", "", &[], &[]), &hidden));
+        let prefs = app("thunar-settings.desktop", "File Manager Preferences", "", &[], &["XFCE", "Settings"]);
+        assert!(is_technical(&prefs, &hidden), "settings dialogs are technical");
     }
 
     #[test]

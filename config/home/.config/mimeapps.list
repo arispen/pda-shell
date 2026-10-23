@@ -1,0 +1,16 @@
+# File associations for the development session. Everything below
+# config/home/ is copied into the session HOME when it is seeded.
+[Default Applications]
+text/plain=org.xfce.mousepad.desktop
+text/markdown=org.xfce.mousepad.desktop
+text/x-markdown=org.xfce.mousepad.desktop
+text/csv=org.gnumeric.gnumeric.desktop
+application/vnd.openxmlformats-officedocument.spreadsheetml.sheet=org.gnumeric.gnumeric.desktop
+application/vnd.ms-excel=org.gnumeric.gnumeric.desktop
+application/x-gnumeric=org.gnumeric.gnumeric.desktop
+application/vnd.oasis.opendocument.spreadsheet=org.gnumeric.gnumeric.desktop
+application/pdf=atril.desktop
+text/html=firefox-esr.desktop
+x-scheme-handler/http=firefox-esr.desktop
+x-scheme-handler/https=firefox-esr.desktop
+inode/directory=thunar.desktop
