@@ -12,13 +12,18 @@ use gtk::gio;
 use gtk::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::cell::RefCell;
 use std::process::{Child, Command};
 use std::rc::Rc;
+use std::time::Duration;
 
 const BUS_NAME: &str = "org.onboard.Onboard";
 const OBJECT_PATH: &str = "/org/onboard/Onboard/Keyboard";
 const INTERFACE: &str = "org.onboard.Onboard.Keyboard";
 const SYSTEM_LAYOUTS: &str = "/usr/share/onboard/layouts";
+/// How long a freshly started keyboard is watched for exiting before it
+/// showed itself (missing modules, no display, ...).
+const STARTUP_WATCH: Duration = Duration::from_secs(15);
 
 /// Resolve a configured layout ("Small" or a path) to an .onboard file.
 pub fn layout_file(name: &str, system_dir: &Path) -> Option<PathBuf> {
@@ -46,7 +51,8 @@ pub struct Keyboard {
     cfg: KeyboardConfig,
     rect: Rect,
     orientation: Orientation,
-    child: Option<Child>,
+    child: Rc<RefCell<Option<Child>>>,
+    on_visible: Rc<dyn Fn(bool)>,
     /// Keeps the D-Bus subscriptions alive.
     _watch: Option<gio::SignalSubscription>,
 }
@@ -59,8 +65,9 @@ impl Keyboard {
             cfg,
             rect: keyboard_rect(layout),
             orientation: layout.orientation,
-            child: None,
-            _watch: watch_visibility(on_visible),
+            child: Rc::default(),
+            _watch: watch_visibility(on_visible.clone()),
+            on_visible,
         }
     }
 
@@ -115,16 +122,15 @@ impl Keyboard {
         gio::Settings::sync();
     }
 
-    fn running(&mut self) -> bool {
-        match self.child.as_mut().map(|c| c.try_wait()) {
-            Some(Ok(None)) => true,
-            Some(Ok(Some(status))) => {
-                log::warn!("onboard exited: {status}");
-                self.child = None;
-                false
-            }
-            _ => false,
-        }
+    fn running(&self) -> bool {
+        child_running(&self.child)
+    }
+
+    /// Report "not visible" from the main loop: the caller is in the middle
+    /// of running the effect that asked for the keyboard.
+    fn report_hidden(&self) {
+        let cb = self.on_visible.clone();
+        glib::idle_add_local_once(move || cb(false));
     }
 
     fn call(&self, method: &str) {
@@ -154,16 +160,21 @@ impl Keyboard {
         if visible && !self.running() {
             let Some((prog, args)) = self.cfg.command.split_first() else {
                 log::warn!("no keyboard command configured");
+                self.report_hidden();
                 return;
             };
             self.configure_onboard();
             match Command::new(prog).args(args).spawn() {
-                // A freshly started Onboard shows itself.
+                // A freshly started Onboard shows itself and reports it.
                 Ok(child) => {
                     log::info!("started {prog} (pid {})", child.id());
-                    self.child = Some(child);
+                    *self.child.borrow_mut() = Some(child);
+                    self.watch_startup();
                 }
-                Err(e) => log::error!("cannot start {prog}: {e}"),
+                Err(e) => {
+                    log::error!("cannot start {prog}: {e}");
+                    self.report_hidden();
+                }
             }
             return;
         }
@@ -172,11 +183,44 @@ impl Keyboard {
         }
     }
 
+    /// A keyboard that exits before it ever took its bus name produces no
+    /// visibility signal; report it as hidden so the toggle rolls back.
+    fn watch_startup(&self) {
+        let (child, cb) = (Rc::downgrade(&self.child), self.on_visible.clone());
+        let mut left = STARTUP_WATCH.as_secs();
+        glib::timeout_add_seconds_local(1, move || {
+            left = left.saturating_sub(1);
+            let Some(child) = child.upgrade() else { return glib::ControlFlow::Break };
+            if !child_running(&child) {
+                cb(false);
+                return glib::ControlFlow::Break;
+            }
+            if left == 0 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
     pub fn stop(&mut self) {
-        if let Some(mut c) = self.child.take() {
+        if let Some(mut c) = self.child.borrow_mut().take() {
             let _ = c.kill();
             let _ = c.wait();
         }
+    }
+}
+
+fn child_running(child: &RefCell<Option<Child>>) -> bool {
+    let mut child = child.borrow_mut();
+    match child.as_mut().map(|c| c.try_wait()) {
+        Some(Ok(None)) => true,
+        Some(Ok(Some(status))) => {
+            log::warn!("onboard exited: {status}");
+            *child = None;
+            false
+        }
+        _ => false,
     }
 }
 

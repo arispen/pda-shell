@@ -37,7 +37,8 @@ fn files_spreadsheet_editor_today_round_trip() {
     assert_eq!(s.view(), View::App(WindowId(2)));
 
     // Keyboard on, edit, keyboard off.
-    assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true), Effect::ReserveKeyboard(true)]);
+    assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true)]);
+    assert_eq!(s.handle(Event::KeyboardVisible(true)), vec![Effect::ReserveKeyboard(true)]);
     assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(false), Effect::ReserveKeyboard(false)]);
 
     // Start Mousepad; it appears while an app is in front and is focused by

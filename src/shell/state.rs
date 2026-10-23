@@ -36,7 +36,9 @@ pub enum Effect {
     /// Show or hide the on-screen keyboard.
     SetKeyboard(bool),
     /// Reserve (or release) screen space for the keyboard, so applications
-    /// shrink instead of being covered.
+    /// shrink instead of being covered. Reserved only once the keyboard has
+    /// reported that it is visible, so a keyboard that fails to start never
+    /// leaves the applications shrunk.
     ReserveKeyboard(bool),
     SetFullscreen(WindowId, bool),
     /// Arm the end-session timeout.
@@ -67,7 +69,10 @@ pub struct ShellState {
     active: Option<WindowId>,
     today: bool,
     start_menu_open: bool,
+    /// The keyboard is shown, or was asked to show (drives the toggle).
     keyboard_visible: bool,
+    /// Screen space is currently reserved for the keyboard.
+    keyboard_reserved: bool,
     ending_session: bool,
     /// Shown in the status bar until the user does something else.
     notice: Option<String>,
@@ -93,6 +98,7 @@ impl ShellState {
             today: true,
             start_menu_open: false,
             keyboard_visible: false,
+            keyboard_reserved: false,
             ending_session: false,
             notice: None,
         }
@@ -199,12 +205,19 @@ impl ShellState {
             Event::ToggleKeyboard => {
                 self.keyboard_visible = !self.keyboard_visible;
                 fx.push(Effect::SetKeyboard(self.keyboard_visible));
-                fx.push(Effect::ReserveKeyboard(self.keyboard_visible));
+                // Space is given back at once; it is taken only when the
+                // keyboard confirms it is visible (KeyboardVisible).
+                if !self.keyboard_visible {
+                    self.release_keyboard(&mut fx);
+                }
             }
             Event::KeyboardVisible(v) => {
-                if v != self.keyboard_visible {
-                    self.keyboard_visible = v;
-                    fx.push(Effect::ReserveKeyboard(v));
+                self.keyboard_visible = v;
+                if v && !self.keyboard_reserved {
+                    self.keyboard_reserved = true;
+                    fx.push(Effect::ReserveKeyboard(true));
+                } else if !v {
+                    self.release_keyboard(&mut fx);
                 }
             }
             Event::LeaveFullscreen => {
@@ -236,6 +249,13 @@ impl ShellState {
             }
         }
         fx
+    }
+
+    fn release_keyboard(&mut self, fx: &mut Vec<Effect>) {
+        if self.keyboard_reserved {
+            self.keyboard_reserved = false;
+            fx.push(Effect::ReserveKeyboard(false));
+        }
     }
 
     fn close_menu(&mut self, fx: &mut Vec<Effect>) {
@@ -435,25 +455,38 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_toggle_shows_and_reserves_space() {
+    fn keyboard_space_is_reserved_once_the_keyboard_is_visible() {
         let mut s = ShellState::new();
-        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true), Effect::ReserveKeyboard(true)]);
-        assert!(s.keyboard_visible());
+        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true)]);
+        assert!(s.keyboard_visible(), "the toggle shows the request at once");
+        assert_eq!(s.handle(Event::KeyboardVisible(true)), vec![Effect::ReserveKeyboard(true)]);
+        // Repeated reports change nothing.
+        assert!(s.handle(Event::KeyboardVisible(true)).is_empty());
         assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(false), Effect::ReserveKeyboard(false)]);
+        assert!(s.handle(Event::KeyboardVisible(false)).is_empty());
+    }
+
+    #[test]
+    fn keyboard_that_fails_to_start_reserves_nothing() {
+        let mut s = ShellState::new();
+        s.handle(Event::ToggleKeyboard);
+        // Launch failed or the program exited before showing itself.
+        assert!(s.handle(Event::KeyboardVisible(false)).is_empty(), "no space was taken, none to give back");
+        assert!(!s.keyboard_visible(), "the toggle rolls back");
+        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true)]);
     }
 
     #[test]
     fn keyboard_hidden_by_its_own_close_key_releases_space() {
         let mut s = ShellState::new();
         s.handle(Event::ToggleKeyboard);
+        s.handle(Event::KeyboardVisible(true));
         // Onboard reports it was hidden: the toggle follows and the
         // application gets its space back.
         assert_eq!(s.handle(Event::KeyboardVisible(false)), vec![Effect::ReserveKeyboard(false)]);
         assert!(!s.keyboard_visible());
         // The next tap shows it again instead of being a no-op hide.
-        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true), Effect::ReserveKeyboard(true)]);
-        // Reports that only confirm the current state change nothing.
-        assert!(s.handle(Event::KeyboardVisible(true)).is_empty());
+        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true)]);
     }
 
     #[test]
