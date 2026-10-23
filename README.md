@@ -6,14 +6,24 @@ applications. `pda-shell` is a temporary internal name.
 
 Stack: Debian 13, X11, Openbox, Rust + GTK 4 (gtk-rs), Onboard, x11rb for EWMH.
 
-![Today in portrait](screenshots/01-today-portrait.png)
+![Gnumeric in portrait with the on-screen keyboard](screenshots/apps/portrait-05-gnumeric-keyboard.png)
 
 ## Status
 
-Milestones 1 (development environment) and 2 (core shell) are working, plus
-the in-shell part of the stylus model (long press) and a first Onboard
-integration. See [docs/known-limitations.md](docs/known-limitations.md) for
-exactly what was verified and what is not done.
+POC 0.2: real desktop programs (Thunar, Gnumeric, Mousepad, Atril, Firefox
+ESR) are edited, saved and reopened **with the pointer and the on-screen
+keyboard only**, in both orientations, by an automated end-to-end test.
+Milestones 1–3 and 5–7 are done as far as possible without the real panel;
+Milestone 4 (system-wide stylus input) waits for the hardware.
+
+- [docs/test-results.md](docs/test-results.md): what was run, results by
+  category, and the recommendation (orientation, density, next steps).
+- [docs/known-limitations.md](docs/known-limitations.md): status per item
+  (automated / demonstrated / unit-tested / unverified) and where the
+  desktop-application approach breaks down.
+- [docs/ergonomics.md](docs/ergonomics.md): physical sizes on the 5" 237 ppi
+  panel and the density profiles.
+- [docs/screenshots.md](docs/screenshots.md): screenshot index.
 
 ## Run it on Debian 13
 
@@ -21,11 +31,14 @@ exactly what was verified and what is not done.
 ./scripts/setup-debian.sh                          # once: toolchain, Xephyr, Openbox, apps
 ./scripts/dev-session.sh --orientation portrait    # 600×1024 window
 ./scripts/dev-session.sh --orientation landscape   # 1024×600 window
+./scripts/dev-session.sh --density readable        # larger density profile
+./scripts/dev-session.sh --reset-home              # fresh sample documents
 ```
 
 The session opens in a Xephyr window inside your normal desktop. It has its
 own display, D-Bus bus and HOME (`.dev-session/home`, seeded with sample
-files), so it does not touch your desktop or settings. Close the Xephyr
+files and default file associations), so it does not touch your desktop or
+settings. `--home DIR` uses another session HOME. Close the Xephyr
 window, press Ctrl+C in the terminal, or use **Start → End session** (which
 closes programs the normal way first) to leave. Logs:
 `.dev-session/logs/latest/` (`session.log`, `shell.log`, `openbox.log`,
@@ -47,25 +60,42 @@ A Debian 13 container built from the same setup script:
 ## Tests
 
 ```bash
-cargo test                    # 65 tests: state machine, layout, gestures, search, config, …
-./scripts/smoke-test.sh       # 54 end-to-end checks in both orientations (Xvfb + Openbox + real apps)
+cargo test                       # unit + integration tests (state machine, layout, config, …)
+./scripts/smoke-test.sh          # shell behaviour in both orientations (Xvfb + Openbox + real apps)
+./scripts/app-workflow-test.sh   # real-program workflow, pointer and on-screen keyboard only
 ```
 
-The smoke test starts a headless session, then drives it with synthetic
-pointer events: checks the struts and work area, opens the Start menu,
-searches and launches Mousepad and Thunar, verifies they are maximized
-between the bars, switches through the switcher, returns to Today,
-long-presses a shortcut for its context menu, closes a program from the
-command bar, and ends the session, checking that no process is left over.
-Screenshots land in `screenshots/smoke/`.
+The **smoke test** checks the shell itself: struts and work area, Start menu
+search and launching, maximized programs, the switcher, Today, long press,
+closing a program and ending the session without leftovers. It types the
+Start menu search with synthetic key events.
+
+The **workflow test** is the POC 0.2 acceptance test. After the session
+starts it only taps: shell buttons, application toolbars and menus, and the
+keys of the on-screen keyboard (`scripts/lib/pda_ui.py` computes Onboard's
+key positions with Onboard's own layout code). It opens the spreadsheet
+from Thunar, edits it in Gnumeric with numbers, a formula and text, saves,
+edits and saves a text file in Mousepad, uses the switcher, pages through
+the PDF in Atril, fills a form in Firefox, takes Firefox to full screen with
+F11 and back with the shell's escape button, reopens both documents from
+Today, opens context menus near the screen edges, and ends the session with
+unsaved work (which must be asked about, not discarded). Saved files are
+checked on disk. Screenshots land in `screenshots/workflow/`.
+
+`./scripts/make-sample-files.py` regenerates the sample documents.
 
 ## Configuration
 
 `config/pda-shell.toml`: every size, colour and input threshold (long-press
-600 ms, 8 px slop, …), Today shortcuts, keyboard command. Session-local edits
-of Today shortcuts are saved to `$XDG_CONFIG_HOME/pda-shell/today-shortcuts`.
+600 ms, 8 px slop, …), density profiles (`[density.compact|balanced|readable]`),
+Today shortcuts, keyboard command and layout, Start menu filtering, full-screen
+policy and dialog fitting. Session-local edits of Today shortcuts are saved to
+`$XDG_CONFIG_HOME/pda-shell/today-shortcuts`.
 `config/openbox/rc.xml`: window-manager rules (maximize and undecorate
-ordinary application windows).
+ordinary application windows). `config/home/`: defaults copied into a new
+session HOME (file associations, Thunar list view with single-tap open).
+`scripts/bin/pda-onboard`: starts Onboard with a fix for symbol keys on
+Debian 13 (see the script).
 
 ## Layout
 
@@ -73,29 +103,30 @@ ordinary application windows).
 src/
   main.rs, lib.rs, config.rs
   shell/      state machine (state.rs), layout.rs, shortcuts.rs, controller (mod.rs)
-  ui/         status_bar/, command_bar/, today/, start_menu/, shared widgets + CSS
+  ui/         status_bar/, command_bar/, today/, start_menu/, escape.rs, shared widgets + CSS
   apps/       desktop entries, search, launching
   input/      gesture recognizer (gesture.rs) + GTK long-press feedback
   keyboard/   Onboard control
   platform/   neutral window types; x11/ = all X11/EWMH code
-scripts/      setup-debian.sh, dev-session.sh, smoke-test.sh, container.sh
-config/       pda-shell.toml, openbox/rc.xml
-docs/         architecture, hardware, UX principles, known limitations
+scripts/      setup-debian.sh, dev-session.sh, smoke-test.sh, app-workflow-test.sh,
+              container.sh, make-sample-files.py, bin/pda-onboard, lib/pda_ui.py
+config/       pda-shell.toml, openbox/rc.xml, home/ (session HOME defaults)
+assets/       sample-files/ (documents copied into the session HOME)
+docs/         architecture, hardware, UX principles, ergonomics, test results,
+              screenshots, known limitations
 tests/        usability_flow.rs
 screenshots/  captured from the running implementation
 ```
 
 ## Screenshots
 
-All captured from the running shell (Xvfb, Openbox, real applications):
+All captured from the running implementation (Xvfb, Openbox, real
+programs) while the workflow test drove it with taps; index and density
+comparisons in [docs/screenshots.md](docs/screenshots.md).
 
 | | |
 |---|---|
-| ![](screenshots/01-today-portrait.png) | ![](screenshots/03-start-menu-portrait.png) |
-| Today, portrait | Start menu, portrait |
-| ![](screenshots/04-file-manager-portrait.png) | ![](screenshots/07-keyboard-portrait.png) |
-| Thunar maximized between the bars | Onboard above the command bar |
-
-More in [screenshots/](screenshots/): landscape Today and Start menu,
-switcher, long-press progress and context menu, keyboard in landscape.
-Spreadsheet and PDF screenshots come with Milestone 3.
+| ![](screenshots/apps/portrait-05-gnumeric-keyboard.png) | ![](screenshots/apps/portrait-12-today-with-apps.png) |
+| Gnumeric, portrait, edited with the on-screen keyboard | Today with five programs open |
+| ![](screenshots/apps/landscape-07-mousepad-keyboard.png) | ![](screenshots/apps/landscape-11-fullscreen-escape.png) |
+| Mousepad, landscape, keyboard open | Firefox full screen with the shell's "Exit full screen" |

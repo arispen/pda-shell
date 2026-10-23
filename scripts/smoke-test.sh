@@ -26,7 +26,7 @@ while [ $# -gt 0 ]; do
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
-for tool in xdotool xprop xwininfo import; do
+for tool in xdotool xprop xwininfo import python3; do
     command -v "$tool" >/dev/null || { echo "missing $tool; run scripts/setup-debian.sh" >&2; exit 1; }
 done
 [ "$BUILD" -eq 1 ] && (cd "$REPO" && cargo build) || [ "$BUILD" -eq 0 ] || exit 1
@@ -76,6 +76,8 @@ no_leftovers() {
     return 0
 }
 tap() { xdotool mousemove "$1" "$2"; sleep 0.15; xdotool click 1; }
+# Finds shell widgets by their accessible name (scripts/lib/pda_ui.py).
+ui() { python3 "$REPO/scripts/lib/pda_ui.py" "$@" 2>/dev/null; }
 shot() { import -window root "$SHOTS/$ORIENT-$1.png"; }
 
 run_orientation() {
@@ -96,6 +98,9 @@ run_orientation() {
     . "$ready"; export DISPLAY
     SESSION_SHELL_PID="$(mktemp)"
     xdotool search --classname pda-shell getwindowpid %1 > "$SESSION_SHELL_PID" 2>/dev/null
+    # The session's own bus, for finding shell widgets over AT-SPI.
+    export DBUS_SESSION_BUS_ADDRESS
+    DBUS_SESSION_BUS_ADDRESS="$(tr '\0' '\n' < "/proc/$(cat "$SESSION_SHELL_PID")/environ" | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p')"
     sleep 1
 
     # --- session and shell surfaces
@@ -138,10 +143,7 @@ run_orientation() {
     tap 100 $((H - 13))
     check "switcher popover opens" wait_for has_popup
     shot switcher
-    local pop; pop="$(shell_popup)"
-    IFS=, read -r px py pw ph <<< "$(geom "$pop")"
-    # Rows are most-recently-used first: row 1 Thunar, row 2 Mousepad.
-    tap $((px + pw / 2)) $((py + 3 + 14 + 7))
+    ui tap pda-shell "list item" "Mousepad" --frame "command bar" >/dev/null
     check "switcher brings Mousepad back" wait_for is_active_class Mousepad
     check "switcher popover closes" wait_for no_popup
 
@@ -152,7 +154,9 @@ run_orientation() {
     shot today-with-apps
 
     # --- long press on the first Today shortcut (Thunar)
-    local sx=50 sy=$((TOP + 23 + 20 + 22))
+    local sx sy sw sh
+    read -r sx sy sw sh <<< "$(ui find pda-shell button "^Thunar" --frame "^Today$")"
+    sx=$((sx + sw / 2)); sy=$((sy + sh / 2))
     xdotool mousemove $sx $sy; sleep 0.15; xdotool mousedown 1; sleep 0.4
     shot long-press-progress
     sleep 0.45
@@ -170,8 +174,7 @@ run_orientation() {
 
     # --- close the active application
     tap 100 $((H - 13)); wait_for has_popup
-    pop="$(shell_popup)"; IFS=, read -r px py pw ph <<< "$(geom "$pop")"
-    tap $((px + pw / 2)) $((py + 3 + 7))     # most recent: Mousepad
+    ui tap pda-shell "list item" "Mousepad" --frame "command bar" >/dev/null
     wait_for is_active_class Mousepad
     tap $((W - 50)) $((H - 13))
     check "Close in the command bar closes Mousepad" wait_for no_class Mousepad

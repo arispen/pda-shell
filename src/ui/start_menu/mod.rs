@@ -1,5 +1,9 @@
 //! Start menu: searchable list of installed programs plus system actions.
 //! Drops down from the top-left corner like the Pocket PC Start menu.
+//!
+//! Technical utilities and settings dialogs are left out of the list (see
+//! `[start_menu] hidden`); search finds every installed program, and an
+//! "Other programs" row at the end lists the rest.
 
 use super::{MenuItem, ShellWindow};
 use crate::apps::{self, AppEntry};
@@ -10,8 +14,10 @@ use crate::shell::layout::Layout;
 use crate::shell::state::Event;
 use crate::shell::{Command, Dispatch};
 use gtk::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+
+const OTHER_ROW: &str = "__other_programs__";
 
 pub struct StartMenu {
     pub win: ShellWindow,
@@ -21,6 +27,7 @@ pub struct StartMenu {
     list: gtk::ListBox,
     apps: RefCell<Vec<AppEntry>>,
     shortcuts: Rc<RefCell<Vec<String>>>,
+    show_other: Cell<bool>,
 }
 
 impl StartMenu {
@@ -41,8 +48,6 @@ impl StartMenu {
         let list = gtk::ListBox::new();
         list.add_css_class("compact");
         list.set_activate_on_single_click(true);
-        let d = dispatch.clone();
-        list.connect_row_activated(move |_, row| d(Command::Shell(Event::Launch(row.widget_name().to_string()))));
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
@@ -87,6 +92,21 @@ impl StartMenu {
             list,
             apps: RefCell::new(Vec::new()),
             shortcuts,
+            show_other: Cell::new(false),
+        });
+
+        let m = Rc::downgrade(&menu);
+        let d = dispatch.clone();
+        menu.list.connect_row_activated(move |_, row| {
+            let id = row.widget_name();
+            if id == OTHER_ROW {
+                if let Some(m) = m.upgrade() {
+                    m.show_other.set(!m.show_other.get());
+                    m.rebuild();
+                }
+            } else {
+                d(Command::Shell(Event::Launch(id.to_string())));
+            }
         });
 
         let m = Rc::downgrade(&menu);
@@ -127,41 +147,33 @@ impl StartMenu {
         self.list.remove_all();
         let apps = self.apps.borrow();
         let query = self.search.text();
-        let px = self.cfg.design.icon_px;
-        for entry in apps::search(&apps, &query) {
-            let row = gtk::ListBoxRow::new();
-            row.set_widget_name(&entry.id);
-            let b = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-            b.append(&super::icon_image(apps::gicon(entry).as_ref(), "application-x-executable", px));
-            let name = gtk::Label::new(Some(&entry.name));
-            name.set_xalign(0.0);
-            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            b.append(&name);
-            if !entry.generic_name.is_empty() && entry.generic_name != entry.name {
-                let g = gtk::Label::new(Some(&entry.generic_name));
-                g.add_css_class("dim");
-                g.set_hexpand(true);
-                g.set_xalign(1.0);
-                g.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                b.append(&g);
+        let hidden = &self.cfg.start_menu.hidden;
+        if query.trim().is_empty() {
+            let (technical, programs): (Vec<&AppEntry>, Vec<&AppEntry>) =
+                apps::search(&apps, "").into_iter().partition(|a| apps::is_technical(a, hidden));
+            for entry in programs {
+                self.append_entry(entry);
             }
-            row.set_child(Some(&b));
-
-            let (id, dsp, shortcuts) = (entry.id.clone(), self.dispatch.clone(), self.shortcuts.clone());
-            super::context_menu(&row, &self.win.feedback, &self.cfg, move || {
-                let (a, b) = (dsp.clone(), dsp.clone());
-                let (ia, ib) = (id.clone(), id.clone());
-                let pinned = shortcuts.borrow().contains(&id);
-                vec![
-                    MenuItem::new("Open", move || a(Command::Shell(Event::Launch(ia.clone())))),
-                    if pinned {
-                        MenuItem::new("Remove from Today", move || b(Command::RemoveShortcut(ib.clone())))
-                    } else {
-                        MenuItem::new("Add to Today", move || b(Command::AddShortcut(ib.clone())))
-                    },
-                ]
-            });
-            self.list.append(&row);
+            if !technical.is_empty() {
+                let row = gtk::ListBoxRow::new();
+                row.set_widget_name(OTHER_ROW);
+                row.add_css_class("more");
+                row.update_property(&[gtk::accessible::Property::Label("Other programs and settings")]);
+                let arrow = if self.show_other.get() { "▾" } else { "▸" };
+                let l = gtk::Label::new(Some(&format!("{arrow} Other programs and settings ({})", technical.len())));
+                l.set_xalign(0.0);
+                row.set_child(Some(&l));
+                self.list.append(&row);
+                if self.show_other.get() {
+                    for entry in technical {
+                        self.append_entry(entry);
+                    }
+                }
+            }
+        } else {
+            for entry in apps::search(&apps, &query) {
+                self.append_entry(entry);
+            }
         }
         if self.list.row_at_index(0).is_none() {
             let row = gtk::ListBoxRow::new();
@@ -173,7 +185,46 @@ impl StartMenu {
         }
     }
 
+    fn append_entry(&self, entry: &AppEntry) {
+        let px = self.cfg.design.icon_px;
+        let row = gtk::ListBoxRow::new();
+        row.set_widget_name(&entry.id);
+        row.update_property(&[gtk::accessible::Property::Label(&entry.name)]);
+        let b = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        b.append(&super::icon_image(apps::gicon(entry).as_ref(), "application-x-executable", px));
+        let name = gtk::Label::new(Some(&entry.name));
+        name.set_xalign(0.0);
+        name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        b.append(&name);
+        if !entry.generic_name.is_empty() && entry.generic_name != entry.name {
+            let g = gtk::Label::new(Some(&entry.generic_name));
+            g.add_css_class("dim");
+            g.set_hexpand(true);
+            g.set_xalign(1.0);
+            g.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            b.append(&g);
+        }
+        row.set_child(Some(&b));
+
+        let (id, dsp, shortcuts) = (entry.id.clone(), self.dispatch.clone(), self.shortcuts.clone());
+        super::context_menu(&row, &self.win.feedback, &self.cfg, move || {
+            let (a, b) = (dsp.clone(), dsp.clone());
+            let (ia, ib) = (id.clone(), id.clone());
+            let pinned = shortcuts.borrow().contains(&id);
+            vec![
+                MenuItem::new("Open", move || a(Command::Shell(Event::Launch(ia.clone())))),
+                if pinned {
+                    MenuItem::new("Remove from Today", move || b(Command::RemoveShortcut(ib.clone())))
+                } else {
+                    MenuItem::new("Add to Today", move || b(Command::AddShortcut(ib.clone())))
+                },
+            ]
+        });
+        self.list.append(&row);
+    }
+
     pub fn show(&self) {
+        self.show_other.set(false);
         self.search.set_text("");
         self.win.window.present();
         self.search.grab_focus();

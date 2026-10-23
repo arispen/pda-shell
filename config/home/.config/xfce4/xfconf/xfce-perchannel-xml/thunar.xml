@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Thunar in the development session: a detailed list (long file names
+     stay readable, rows are easy stylus targets) and a single tap opens,
+     as in the Pocket PC File Explorer. -->
+<channel name="thunar" version="1.0">
+  <property name="last-view" type="string" value="ThunarDetailsView"/>
+  <property name="misc-single-click" type="bool" value="true"/>
+  <property name="misc-single-click-timeout" type="uint" value="0"/>
+  <property name="last-show-hidden" type="bool" value="false"/>
+</channel>

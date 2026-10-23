@@ -2,17 +2,19 @@
 //!
 //! Two connections are used: one owned by the GTK main thread for requests
 //! (window roles, activation, closing) and one owned by a watcher thread that
-//! blocks on events and publishes [`WindowSnapshot`]s.
+//! blocks on events and publishes [`WindowSnapshot`]s. The watcher also keeps
+//! dialogs inside the work area and logs windows that cannot fit it
+//! (`geometry:` lines in the shell log).
 
 pub mod gtk_glue;
 
 use super::{AppWindow, SurfaceRole, WindowId, WindowSnapshot, WindowSystem};
-use crate::shell::layout::Rect;
-use std::collections::HashSet;
+use crate::shell::layout::{fit_within, Rect};
+use std::collections::{HashMap, HashSet};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _,
-    EventMask, PropMode, Window,
+    EventMask, PropMode, StackMode, Window,
 };
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
@@ -44,6 +46,9 @@ x11rb::atom_manager! {
         _NET_WM_STATE_SKIP_PAGER,
         _NET_WM_STATE_STICKY,
         _NET_WM_STATE_ABOVE,
+        _NET_WM_STATE_FULLSCREEN,
+        _NET_FRAME_EXTENTS,
+        _NET_MOVERESIZE_WINDOW,
     }
 }
 
@@ -82,6 +87,13 @@ impl X11 {
     /// Give one of the shell's own (not yet mapped) windows its role.
     pub fn apply_role(&self, window: u32, role: SurfaceRole, rect: Rect) -> Result<()> {
         let a = &self.atoms;
+        if role == SurfaceRole::Escape {
+            // Not managed by the window manager at all, so it can sit above
+            // full-screen windows, which Openbox stacks above every layer.
+            let aux = ChangeWindowAttributesAux::new().override_redirect(1);
+            self.conn.change_window_attributes(window, &aux)?;
+            return self.place(window, rect);
+        }
         let (kind, states): (u32, Vec<u32>) = match role {
             SurfaceRole::TopPanel | SurfaceRole::BottomPanel => (
                 a._NET_WM_WINDOW_TYPE_DOCK,
@@ -91,7 +103,7 @@ impl X11 {
                 a._NET_WM_WINDOW_TYPE_DESKTOP,
                 vec![a._NET_WM_STATE_STICKY, a._NET_WM_STATE_SKIP_TASKBAR, a._NET_WM_STATE_SKIP_PAGER],
             ),
-            SurfaceRole::Overlay => (
+            SurfaceRole::Overlay | SurfaceRole::Escape => (
                 a._NET_WM_WINDOW_TYPE_UTILITY,
                 vec![a._NET_WM_STATE_ABOVE, a._NET_WM_STATE_SKIP_TASKBAR, a._NET_WM_STATE_SKIP_PAGER],
             ),
@@ -126,6 +138,13 @@ impl X11 {
     pub fn place(&self, window: u32, rect: Rect) -> Result<()> {
         let aux = ConfigureWindowAux::new().x(rect.x).y(rect.y).width(rect.width).height(rect.height);
         self.conn.configure_window(window, &aux)?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    /// Put one of the shell's unmanaged windows on top of the stack.
+    pub fn raise(&self, window: u32) -> Result<()> {
+        self.conn.configure_window(window, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE))?;
         self.conn.flush()?;
         Ok(())
     }
@@ -175,6 +194,15 @@ impl WindowSystem for X11 {
             log::warn!("show desktop: {e}");
         }
     }
+
+    fn set_fullscreen(&self, id: WindowId, on: bool) {
+        // _NET_WM_STATE: action (0 remove, 1 add), property, -, source (2 = pager).
+        let a = &self.atoms;
+        let r = self.send_root_message(id.0, a._NET_WM_STATE, [on as u32, a._NET_WM_STATE_FULLSCREEN, 0, 2, 0]);
+        if let Err(e) = r {
+            log::warn!("fullscreen {:#x}: {e}", id.0);
+        }
+    }
 }
 
 /// Raw facts about one managed window.
@@ -186,7 +214,19 @@ pub struct ClientInfo {
     pub pid: Option<u32>,
     pub types: Vec<WindowType>,
     pub skip_taskbar: bool,
+    pub fullscreen: bool,
     pub transient_for: Option<u32>,
+}
+
+impl ClientInfo {
+    fn shell_owned(&self, own_pid: u32) -> bool {
+        self.pid == Some(own_pid) || SHELL_CLASSES.contains(&self.class.as_str())
+    }
+
+    /// Dialogs and other windows that belong to a parent window.
+    pub fn is_dialog(&self) -> bool {
+        self.types.first() == Some(&WindowType::Dialog) || self.transient_for.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,7 +241,7 @@ pub enum WindowType {
 
 /// Whether a managed window should appear in the switcher.
 pub fn is_switchable(c: &ClientInfo, own_pid: u32) -> bool {
-    if c.skip_taskbar || c.pid == Some(own_pid) || SHELL_CLASSES.contains(&c.class.as_str()) {
+    if c.skip_taskbar || c.shell_owned(own_pid) {
         return false;
     }
     match c.types.first() {
@@ -235,7 +275,7 @@ pub fn resolve_active(
     if let Some(parent) = client.transient_for.filter(|p| is_app(*p)) {
         return Some(WindowId(parent));
     }
-    let shell_owned = client.pid == Some(own_pid) || SHELL_CLASSES.contains(&client.class.as_str());
+    let shell_owned = client.shell_owned(own_pid);
     let desktop = client.types.first() == Some(&WindowType::Desktop);
     if shell_owned && !desktop {
         return previous.filter(|p| is_app(p.0));
@@ -243,10 +283,26 @@ pub fn resolve_active(
     None
 }
 
+/// `WM_NORMAL_HINTS` minimum size, if the window sets one (`PMinSize`).
+pub fn min_size(hints: &[u32]) -> Option<(u32, u32)> {
+    const P_MIN_SIZE: u32 = 1 << 4;
+    match hints {
+        [flags, _, _, _, _, w, h, ..] if flags & P_MIN_SIZE != 0 => Some((*w, *h)),
+        _ => None,
+    }
+}
+
 struct Watcher {
     x: X11,
     own_pid: u32,
+    fit_dialogs: bool,
     watched: HashSet<u32>,
+    /// Dialogs, the work area they were last checked against, and their
+    /// size then (a dialog that resizes itself is checked again; one the
+    /// user merely moves is left where the user put it).
+    dialogs: HashMap<u32, (Option<Rect>, (u32, u32))>,
+    /// Windows already reported as not fitting, so the log stays readable.
+    reported: HashSet<u32>,
     last_active: Option<WindowId>,
 }
 
@@ -306,6 +362,7 @@ impl Watcher {
             pid: self.prop32(id, a._NET_WM_PID, AtomEnum::CARDINAL).first().copied(),
             types,
             skip_taskbar: states.contains(&a._NET_WM_STATE_SKIP_TASKBAR),
+            fullscreen: states.contains(&a._NET_WM_STATE_FULLSCREEN),
             transient_for: self
                 .prop32(id, a.WM_TRANSIENT_FOR, AtomEnum::WINDOW)
                 .first()
@@ -319,19 +376,29 @@ impl Watcher {
         let ids = self.prop32(self.x.root, a._NET_CLIENT_LIST, AtomEnum::WINDOW);
         let clients: Vec<ClientInfo> = ids.iter().map(|id| self.client(*id)).collect();
 
-        // Follow title changes of windows we have not seen before.
+        // Follow title and size changes of windows we have not seen before.
         for id in &ids {
             if self.watched.insert(*id) {
-                let aux = ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE);
-                let _ = self.x.conn.change_window_attributes(*id, &aux);
+                let mask = EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY;
+                let _ = self.x.conn.change_window_attributes(*id, &ChangeWindowAttributesAux::new().event_mask(mask));
             }
         }
         self.watched.retain(|w| ids.contains(w));
+        self.dialogs.retain(|w, _| ids.contains(w));
+        self.reported.retain(|w| ids.contains(w));
+        self.check_geometry(&clients);
+        let a = &self.x.atoms;
 
         let windows: Vec<AppWindow> = clients
             .iter()
             .filter(|c| is_switchable(c, self.own_pid))
-            .map(|c| AppWindow { id: WindowId(c.id), title: c.title.clone(), app_class: c.class.clone(), pid: c.pid })
+            .map(|c| AppWindow {
+                id: WindowId(c.id),
+                title: c.title.clone(),
+                app_class: c.class.clone(),
+                pid: c.pid,
+                fullscreen: c.fullscreen,
+            })
             .collect();
         let active_raw =
             self.prop32(self.x.root, a._NET_ACTIVE_WINDOW, AtomEnum::WINDOW).first().copied().filter(|w| *w != 0);
@@ -343,7 +410,68 @@ impl Watcher {
         WindowSnapshot { windows, active, showing_desktop }
     }
 
-    fn relevant(&self, event: &Event) -> bool {
+    /// Outer (frame) rectangle of a managed window in root coordinates.
+    fn frame_rect(&self, id: u32) -> Option<(Rect, [u32; 4])> {
+        let geo = self.x.conn.get_geometry(id).ok()?.reply().ok()?;
+        let pos = self.x.conn.translate_coordinates(id, self.x.root, 0, 0).ok()?.reply().ok()?;
+        let e = self.prop32(id, self.x.atoms._NET_FRAME_EXTENTS, AtomEnum::CARDINAL);
+        let [l, r, t, b] = <[u32; 4]>::try_from(e.as_slice()).unwrap_or([0; 4]);
+        let outer = Rect::new(
+            pos.dst_x as i32 - l as i32,
+            pos.dst_y as i32 - t as i32,
+            geo.width as u32 + l + r,
+            geo.height as u32 + t + b,
+        );
+        Some((outer, [l, r, t, b]))
+    }
+
+    /// Keep dialogs inside the work area (the keyboard shrinks it) and report
+    /// windows whose minimum size is larger than the work area.
+    fn check_geometry(&mut self, clients: &[ClientInfo]) {
+        let Some(wa) = self.x.workarea().ok().flatten() else { return };
+        for c in clients.iter().filter(|c| !c.shell_owned(self.own_pid) && !c.fullscreen) {
+            let hints = self.prop32(c.id, AtomEnum::WM_NORMAL_HINTS.into(), AtomEnum::WM_SIZE_HINTS);
+            if let Some((w, h)) = min_size(&hints).filter(|(w, h)| *w > wa.width || *h > wa.height) {
+                if self.reported.insert(c.id) {
+                    log::warn!(
+                        "geometry: {} {:?} needs at least {w}x{h}, more than the {}x{} work area",
+                        c.class, c.title, wa.width, wa.height
+                    );
+                }
+            }
+            if !c.is_dialog() || self.dialogs.get(&c.id).is_some_and(|(checked, _)| *checked == Some(wa)) {
+                continue;
+            }
+            let Some((outer, [l, r, t, b])) = self.frame_rect(c.id) else { continue };
+            let client_size = (outer.width - l - r, outer.height - t - b);
+            self.dialogs.insert(c.id, (Some(wa), client_size));
+            let min = min_size(&hints).map_or((0, 0), |(w, h)| (w + l + r, h + t + b));
+            let Some(fit) = fit_within(outer, wa, min).filter(|_| self.fit_dialogs) else {
+                if !wa.contains(&outer) {
+                    log::warn!("geometry: dialog {:?} ({}) outside the work area: {outer:?}", c.title, c.class);
+                }
+                continue;
+            };
+            if !wa.contains(&fit) {
+                log::warn!(
+                    "geometry: dialog {:?} ({}) cannot shrink to the work area; aligned to keep its buttons visible",
+                    c.title, c.class
+                );
+            }
+            log::info!("geometry: fitting dialog {:?} ({}) from {outer:?} into {fit:?}", c.title, c.class);
+            // Gravity NorthWest (1), x/y/width/height present, source = pager.
+            let flags = 1 | 0xF00 | (2 << 12);
+            let w = fit.width.saturating_sub(l + r).max(1);
+            let h = fit.height.saturating_sub(t + b).max(1);
+            if let Err(e) =
+                self.x.send_root_message(c.id, self.x.atoms._NET_MOVERESIZE_WINDOW, [flags, fit.x as u32, fit.y as u32, w, h])
+            {
+                log::warn!("cannot move dialog {:#x}: {e}", c.id);
+            }
+        }
+    }
+
+    fn relevant(&mut self, event: &Event) -> bool {
         let a = &self.x.atoms;
         match event {
             Event::PropertyNotify(e) if e.window == self.x.root => [
@@ -356,6 +484,14 @@ impl Watcher {
             Event::PropertyNotify(e) => {
                 [a._NET_WM_NAME, AtomEnum::WM_NAME.into(), a._NET_WM_STATE, a._NET_WM_WINDOW_TYPE].contains(&e.atom)
             }
+            // A dialog that resizes itself after mapping is checked again.
+            Event::ConfigureNotify(e) => match self.dialogs.get_mut(&e.window) {
+                Some(entry) if entry.1 != (e.width as u32, e.height as u32) => {
+                    entry.0 = None;
+                    true
+                }
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -398,11 +534,20 @@ impl Watcher {
 }
 
 /// Start the window watcher thread.
-pub fn spawn_watcher(own_pid: u32) -> Result<async_channel::Receiver<WindowSnapshot>> {
+pub fn spawn_watcher(own_pid: u32, fit_dialogs: bool) -> Result<async_channel::Receiver<WindowSnapshot>> {
     let x = X11::connect()?;
     let (tx, rx) = async_channel::unbounded();
     std::thread::Builder::new().name("x11-watcher".into()).spawn(move || {
-        Watcher { x, own_pid, watched: HashSet::new(), last_active: None }.run(tx)
+        Watcher {
+            x,
+            own_pid,
+            fit_dialogs,
+            watched: HashSet::new(),
+            dialogs: HashMap::new(),
+            reported: HashSet::new(),
+            last_active: None,
+        }
+        .run(tx)
     })?;
     Ok(rx)
 }
@@ -418,7 +563,31 @@ mod tests {
     }
 
     fn app(c: &ClientInfo) -> AppWindow {
-        AppWindow { id: WindowId(c.id), title: c.title.clone(), app_class: c.class.clone(), pid: c.pid }
+        AppWindow {
+            id: WindowId(c.id),
+            title: c.title.clone(),
+            app_class: c.class.clone(),
+            pid: c.pid,
+            fullscreen: c.fullscreen,
+        }
+    }
+
+    #[test]
+    fn minimum_size_hint() {
+        // flags, x, y, w, h, min_w, min_h, ...
+        assert_eq!(min_size(&[16, 0, 0, 0, 0, 640, 480, 0, 0]), Some((640, 480)));
+        assert_eq!(min_size(&[8, 0, 0, 0, 0, 640, 480, 0, 0]), None, "PMinSize not set");
+        assert_eq!(min_size(&[16, 0]), None);
+        assert_eq!(min_size(&[]), None);
+    }
+
+    #[test]
+    fn dialogs_are_dialog_typed_or_transient() {
+        assert!(client(1, "Gnumeric", &[WindowType::Dialog]).is_dialog());
+        let mut t = client(2, "Mousepad", &[WindowType::Normal]);
+        assert!(!t.is_dialog());
+        t.transient_for = Some(1);
+        assert!(t.is_dialog());
     }
 
     #[test]

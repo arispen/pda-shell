@@ -50,7 +50,8 @@ is `gtk_glue::xid()`, which returns the X window ID of a realized GTK window.
 Keeping decisions in `ShellState` means the behaviour (what Today means, when a
 new window is brought forward, when ending the session may quit) is unit
 tested without a display; `tests/usability_flow.rs` replays the manual test
-script against it.
+script against it, and `scripts/app-workflow-test.sh` runs it end to end with
+real programs.
 
 ## Shell surfaces and the window manager
 
@@ -63,7 +64,8 @@ mapped (`ShellWindow::new`, `X11::apply_role`):
 | Status bar | `DOCK` | `_NET_WM_STRUT(_PARTIAL)` top |
 | Command bar | `DOCK` | strut bottom; grows by the keyboard height while Onboard is shown |
 | Today | `DESKTOP` | sized to the work area, below all apps |
-| Start menu | `UTILITY` | `_NET_WM_STATE_ABOVE`, activated explicitly when shown |
+| Start menu | `UTILITY` | `_NET_WM_STATE_ABOVE`, activated explicitly when shown; shrinks with the keyboard |
+| Exit full screen | none (override-redirect) | not managed, so it can stay above full-screen programs; re-raised every 400 ms while shown |
 
 Every surface is then moved to its layout rectangle with `ConfigureWindow`
 (once before map, again on map in case the WM placed it).
@@ -79,9 +81,33 @@ application windows, the desktop-type Today window is what remains, and
 activating any application leaves the mode again. Applications keep running
 and keep their state.
 
+Full screen: the watcher reports `_NET_WM_STATE_FULLSCREEN` per window. With
+`[windows] fullscreen = "escape"` the shell shows the "Exit full screen"
+surface while the program in front is full screen and removes the state with
+a `_NET_WM_STATE` client message when it is tapped; with `"prevent"` it
+removes the state as soon as a window enters it.
+
+Dialogs: the watcher reads each dialog's frame (`_NET_FRAME_EXTENTS`) and
+`WM_NORMAL_HINTS` minimum size and, if it does not lie inside
+`_NET_WORKAREA`, sends `_NET_MOVERESIZE_WINDOW` with the result of
+`layout::fit_within` (shrink, move inside; a dialog that cannot shrink keeps
+its bottom-right corner, where GTK puts the buttons, on screen). This
+happens when a dialog appears, when it resizes itself and when the work area
+changes, never after the user moves it. Windows that cannot fit are logged
+with a `geometry:` prefix.
+
+On-screen keyboard: the command bar's strut grows by the keyboard height
+while Onboard is shown, so Openbox shrinks maximized programs; Today and the
+Start menu are resized by the shell. Onboard's `Visible` property
+(`PropertiesChanged` on its D-Bus object) and its bus name are watched, so
+hiding it with its own key or Onboard exiting releases the space and resets
+the toggle. Onboard is started through `scripts/bin/pda-onboard`, which works
+around Onboard 1.4.1's broken symbol keys on Python 3.12+.
+
 Closing uses `_NET_CLOSE_WINDOW`, so each application can ask to save. "End
 session" closes every application this way and only quits when all windows
-have gone; if some remain after 15 s (e.g. a save prompt) the session stays.
+have gone; if some remain after 15 s (e.g. a save prompt) the session stays
+and the status bar says "Some programs are still open".
 
 ## Stylus input
 

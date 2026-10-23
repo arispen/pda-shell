@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field station - local page</title>
+<style>
+  body { font-family: "DejaVu Sans", sans-serif; margin: 0; color: #1a1a1a; }
+  header { background: #1d3f72; color: #fff; padding: 8px 12px; }
+  main { padding: 8px 12px; max-width: 760px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border-bottom: 1px solid #ccd; padding: 3px 6px; text-align: left; }
+  th { background: #eef2f8; }
+  label { display: block; margin-top: 8px; }
+  input, textarea { font: inherit; width: 100%; box-sizing: border-box; }
+</style>
+</head>
+<body>
+<header><h1 style="margin:0;font-size:20px">Field station</h1>
+<div>Local test page, no network needed</div></header>
+<main>
+<p>This page checks that Firefox renders a real web page inside the work area,
+that links work with a stylus tap, and that text can be typed into a form
+with the on-screen keyboard.</p>
+<h2>Readings</h2>
+<table>
+<tr><th>Time</th><th>Temperature</th><th>Humidity</th><th>Battery</th></tr>
+<tr><td>06:00</td><td>7.4 °C</td><td>88 %</td><td>97 %</td></tr>
+<tr><td>09:00</td><td>11.0 °C</td><td>74 %</td><td>95 %</td></tr>
+<tr><td>12:00</td><td>15.8 °C</td><td>61 %</td><td>92 %</td></tr>
+<tr><td>15:00</td><td>16.2 °C</td><td>58 %</td><td>90 %</td></tr>
+</table>
+<h2>Log an observation</h2>
+<form onsubmit="event.preventDefault(); document.getElementById('out').textContent = 'Saved: ' + document.getElementById('obs').value;">
+<label for="who">Observer</label><input id="who" name="who" placeholder="Your name">
+<label for="obs">Observation</label><textarea id="obs" name="obs" rows="3"></textarea>
+<p><button type="submit">Save observation</button> <span id="out"></span></p>
+</form>
+<p><a href="about.html">About this station</a></p>
+</main>
+</body>
+</html>

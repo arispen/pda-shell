@@ -2,6 +2,7 @@
 //! [`Event`]s; the resulting work comes out as [`Effect`]s that the GTK side
 //! executes. Nothing here touches GTK or X11, so it is fully unit-tested.
 
+use crate::config::FullscreenMode;
 use crate::platform::{AppWindow, WindowId, WindowSnapshot};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -14,8 +15,11 @@ pub enum Event {
     CloseActive,
     CloseAll,
     ToggleKeyboard,
-    /// The keyboard reported its real visibility.
+    /// The keyboard reported its real visibility (it can also be hidden
+    /// with its own close key, or exit).
     KeyboardVisible(bool),
+    /// The "Exit full screen" button.
+    LeaveFullscreen,
     Launch(String),
     EndSession,
     /// Applications did not all close in time; stay in the session.
@@ -29,7 +33,12 @@ pub enum Effect {
     Close(WindowId),
     ShowStartMenu(bool),
     Launch(String),
+    /// Show or hide the on-screen keyboard.
     SetKeyboard(bool),
+    /// Reserve (or release) screen space for the keyboard, so applications
+    /// shrink instead of being covered.
+    ReserveKeyboard(bool),
+    SetFullscreen(WindowId, bool),
     /// Arm the end-session timeout.
     StartEndSessionTimer,
     Quit,
@@ -49,8 +58,9 @@ pub enum ContextAction {
     CancelMenu,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ShellState {
+    fullscreen_mode: FullscreenMode,
     windows: Vec<AppWindow>,
     /// Most recently used first.
     mru: Vec<WindowId>,
@@ -59,11 +69,33 @@ pub struct ShellState {
     start_menu_open: bool,
     keyboard_visible: bool,
     ending_session: bool,
+    /// Shown in the status bar until the user does something else.
+    notice: Option<String>,
+}
+
+impl Default for ShellState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ShellState {
     pub fn new() -> Self {
-        Self { today: true, ..Default::default() }
+        Self::with_fullscreen_mode(FullscreenMode::Escape)
+    }
+
+    pub fn with_fullscreen_mode(fullscreen_mode: FullscreenMode) -> Self {
+        Self {
+            fullscreen_mode,
+            windows: Vec::new(),
+            mru: Vec::new(),
+            active: None,
+            today: true,
+            start_menu_open: false,
+            keyboard_visible: false,
+            ending_session: false,
+            notice: None,
+        }
     }
 
     pub fn view(&self) -> View {
@@ -85,6 +117,14 @@ impl ShellState {
         self.ending_session
     }
 
+    /// The active application covers the bars; offer the way back.
+    pub fn fullscreen_escape(&self) -> bool {
+        match self.view() {
+            View::App(id) => self.window(id).is_some_and(|w| w.fullscreen),
+            View::Today => false,
+        }
+    }
+
     /// Windows for the switcher, most recently used first.
     pub fn switcher_entries(&self) -> Vec<&AppWindow> {
         self.mru.iter().filter_map(|id| self.window(*id)).collect()
@@ -97,6 +137,9 @@ impl ShellState {
     pub fn title(&self) -> String {
         if self.start_menu_open {
             return "Start".into();
+        }
+        if let Some(n) = &self.notice {
+            return n.clone();
         }
         match self.view() {
             View::Today => "Today".into(),
@@ -119,6 +162,9 @@ impl ShellState {
 
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
         let mut fx = Vec::new();
+        if !matches!(event, Event::Windows(_) | Event::KeyboardVisible(_) | Event::EndSessionTimeout) {
+            self.notice = None;
+        }
         match event {
             Event::Windows(snap) => self.apply_snapshot(snap, &mut fx),
             Event::StartButton => {
@@ -153,8 +199,19 @@ impl ShellState {
             Event::ToggleKeyboard => {
                 self.keyboard_visible = !self.keyboard_visible;
                 fx.push(Effect::SetKeyboard(self.keyboard_visible));
+                fx.push(Effect::ReserveKeyboard(self.keyboard_visible));
             }
-            Event::KeyboardVisible(v) => self.keyboard_visible = v,
+            Event::KeyboardVisible(v) => {
+                if v != self.keyboard_visible {
+                    self.keyboard_visible = v;
+                    fx.push(Effect::ReserveKeyboard(v));
+                }
+            }
+            Event::LeaveFullscreen => {
+                if let (true, View::App(id)) = (self.fullscreen_escape(), self.view()) {
+                    fx.push(Effect::SetFullscreen(id, false));
+                }
+            }
             Event::Launch(app) => {
                 self.close_menu(&mut fx);
                 fx.push(Effect::Launch(app));
@@ -171,7 +228,12 @@ impl ShellState {
                     fx.push(Effect::StartEndSessionTimer);
                 }
             }
-            Event::EndSessionTimeout => self.ending_session = false,
+            Event::EndSessionTimeout => {
+                self.ending_session = false;
+                if !self.windows.is_empty() {
+                    self.notice = Some("Some programs are still open".into());
+                }
+            }
         }
         fx
     }
@@ -195,6 +257,13 @@ impl ShellState {
             .filter(|w| self.window(w.id).is_none())
             .map(|w| w.id)
             .collect();
+        if self.fullscreen_mode == FullscreenMode::Prevent {
+            for w in snap.windows.iter().filter(|w| w.fullscreen) {
+                if !self.window(w.id).is_some_and(|old| old.fullscreen) {
+                    fx.push(Effect::SetFullscreen(w.id, false));
+                }
+            }
+        }
 
         self.windows = snap.windows;
         let alive = |id: &WindowId| self.windows.iter().any(|w| w.id == *id);
@@ -234,7 +303,11 @@ mod tests {
     use super::*;
 
     fn win(id: u32, title: &str) -> AppWindow {
-        AppWindow { id: WindowId(id), title: title.into(), app_class: "App".into(), pid: None }
+        AppWindow { id: WindowId(id), title: title.into(), app_class: "App".into(), pid: None, fullscreen: false }
+    }
+
+    fn fullscreen(id: u32) -> AppWindow {
+        AppWindow { fullscreen: true, ..win(id, "video") }
     }
 
     fn snap(windows: Vec<AppWindow>, active: Option<u32>, showing_desktop: bool) -> Event {
@@ -362,11 +435,49 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_toggle_tracks_reported_state() {
+    fn keyboard_toggle_shows_and_reserves_space() {
         let mut s = ShellState::new();
-        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true)]);
-        s.handle(Event::KeyboardVisible(false));
-        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true)]);
+        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true), Effect::ReserveKeyboard(true)]);
+        assert!(s.keyboard_visible());
+        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(false), Effect::ReserveKeyboard(false)]);
+    }
+
+    #[test]
+    fn keyboard_hidden_by_its_own_close_key_releases_space() {
+        let mut s = ShellState::new();
+        s.handle(Event::ToggleKeyboard);
+        // Onboard reports it was hidden: the toggle follows and the
+        // application gets its space back.
+        assert_eq!(s.handle(Event::KeyboardVisible(false)), vec![Effect::ReserveKeyboard(false)]);
+        assert!(!s.keyboard_visible());
+        // The next tap shows it again instead of being a no-op hide.
+        assert_eq!(s.handle(Event::ToggleKeyboard), vec![Effect::SetKeyboard(true), Effect::ReserveKeyboard(true)]);
+        // Reports that only confirm the current state change nothing.
+        assert!(s.handle(Event::KeyboardVisible(true)).is_empty());
+    }
+
+    #[test]
+    fn fullscreen_app_gets_an_escape() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, "a")], Some(1), false));
+        assert!(!s.fullscreen_escape());
+        assert!(s.handle(Event::LeaveFullscreen).is_empty());
+        let fx = s.handle(snap(vec![fullscreen(1)], Some(1), false));
+        assert!(fx.is_empty(), "escape mode allows full screen");
+        assert!(s.fullscreen_escape());
+        assert_eq!(s.handle(Event::LeaveFullscreen), vec![Effect::SetFullscreen(WindowId(1), false)]);
+        // Today hides the app, so there is nothing to escape from.
+        s.handle(snap(vec![fullscreen(1)], None, true));
+        assert!(!s.fullscreen_escape());
+    }
+
+    #[test]
+    fn prevent_mode_takes_windows_out_of_fullscreen_once() {
+        let mut s = ShellState::with_fullscreen_mode(FullscreenMode::Prevent);
+        s.handle(snap(vec![win(1, "a")], Some(1), false));
+        assert_eq!(s.handle(snap(vec![fullscreen(1)], Some(1), false)), vec![Effect::SetFullscreen(WindowId(1), false)]);
+        // Not repeated for every snapshot while the request is in flight.
+        assert!(s.handle(snap(vec![fullscreen(1)], Some(1), false)).is_empty());
     }
 
     #[test]
@@ -398,6 +509,9 @@ mod tests {
         s.handle(Event::EndSession);
         s.handle(Event::EndSessionTimeout);
         assert!(!s.ending_session());
+        assert_eq!(s.title(), "Some programs are still open");
+        s.handle(Event::Switch(WindowId(1)));
+        assert_eq!(s.title(), "unsaved", "the notice goes away with the next action");
         // Closing the app later is not mistaken for the end of the session.
         assert!(s.handle(snap(vec![], None, false)).is_empty());
     }

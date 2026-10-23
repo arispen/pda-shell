@@ -13,6 +13,11 @@
 #   --release           build and run the release binary
 #   --no-shell          start X + Openbox only (debugging)
 #   --ready-file PATH   write "DISPLAY=:N" to PATH once the shell is mapped
+#   --density NAME      design density profile from config/pda-shell.toml
+#                       (e.g. compact, readable); default: the file's choice
+#   --home DIR          session HOME (default .dev-session/home); seeded with
+#                       the sample documents on first use
+#   --reset-home        delete the session HOME first (fresh sample files)
 #
 # Everything started here is isolated from the host desktop: its own X
 # display, its own D-Bus session bus, and its own HOME/XDG directories under
@@ -28,8 +33,11 @@ BUILD=1
 PROFILE="debug"
 RUN_SHELL=1
 READY_FILE=""
+DENSITY=""
+SESSION_HOME=""
+RESET_HOME=0
 
-usage() { sed -n '2,22p' "$0"; }
+usage() { sed -n '2,27p' "$0"; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -41,6 +49,9 @@ while [ $# -gt 0 ]; do
         --release) PROFILE="release"; shift ;;
         --no-shell) RUN_SHELL=0; shift ;;
         --ready-file) READY_FILE="${2:?}"; shift 2 ;;
+        --density) DENSITY="${2:?}"; shift 2 ;;
+        --home) SESSION_HOME="${2:?}"; shift 2 ;;
+        --reset-home) RESET_HOME=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -77,17 +88,30 @@ fi
 SESSION_ROOT="$REPO/.dev-session"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 LOG_DIR="$SESSION_ROOT/logs/$STAMP-$ORIENTATION"
-SESSION_HOME="$SESSION_ROOT/home"
+SESSION_HOME="${SESSION_HOME:-$SESSION_ROOT/home}"
+case "$SESSION_HOME" in /*) ;; *) SESSION_HOME="$PWD/$SESSION_HOME" ;; esac
 # Sockets need a local file system with Unix permissions, so the runtime
 # directory lives in /tmp rather than in the (possibly shared) checkout.
 RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pda-shell-run.XXXXXX")"
+if [ "$RESET_HOME" -eq 1 ]; then
+    case "$SESSION_HOME" in
+        /|"$HOME"|"$HOME"/) echo "refusing to delete $SESSION_HOME" >&2; exit 2 ;;
+    esac
+    rm -rf "$SESSION_HOME"
+fi
 mkdir -p "$LOG_DIR" "$SESSION_HOME"
 ln -sfn "$LOG_DIR" "$SESSION_ROOT/logs/latest"
 
-if [ ! -e "$SESSION_HOME/.seeded" ]; then
+# Sample documents (assets/sample-files) and default settings (config/home:
+# file associations, Thunar list view). Bump SEED_VERSION when either
+# changes: existing homes then get the new files, but files the developer
+# already has (and may have edited) are never replaced.
+SEED_VERSION=2
+if [ "$(cat "$SESSION_HOME/.seed-version" 2>/dev/null)" != "$SEED_VERSION" ]; then
     mkdir -p "$SESSION_HOME/Documents" "$SESSION_HOME/.config" "$SESSION_HOME/.local/share" "$SESSION_HOME/.cache"
-    cp -R "$REPO/assets/sample-files/." "$SESSION_HOME/Documents/" 2>/dev/null || true
-    touch "$SESSION_HOME/.seeded"
+    cp -Rn "$REPO/assets/sample-files/." "$SESSION_HOME/Documents/" 2>/dev/null || true
+    cp -Rn "$REPO/config/home/." "$SESSION_HOME/" 2>/dev/null || true
+    echo "$SEED_VERSION" > "$SESSION_HOME/.seed-version"
 fi
 
 log() { printf '%s [dev-session] %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$LOG_DIR/session.log" >&2; }
@@ -138,7 +162,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-log "orientation=$ORIENTATION ${WIDTH}x${HEIGHT} display=$NESTED server=$XSERVER"
+log "orientation=$ORIENTATION ${WIDTH}x${HEIGHT} display=$NESTED server=$XSERVER home=$SESSION_HOME density=${DENSITY:-default}"
 if [ "$HEADLESS" -eq 1 ]; then
     Xvfb "$NESTED" -screen 0 "${WIDTH}x${HEIGHT}x24" -nolisten tcp -dpi 96 \
         > "$LOG_DIR/xserver.log" 2>&1 &
@@ -171,6 +195,9 @@ export XDG_STATE_HOME="$SESSION_HOME/.local/state"
 export XDG_RUNTIME_DIR="$RUNTIME_DIR"
 export PDA_SHELL_CONFIG="${PDA_SHELL_CONFIG:-$REPO/config/pda-shell.toml}"
 export PDA_SHELL_ORIENTATION="$ORIENTATION"
+# Session helpers (pda-onboard) are found before system programs.
+export PATH="$REPO/scripts/bin:$PATH"
+[ -n "$DENSITY" ] && export PDA_SHELL_DENSITY="$DENSITY"
 export RUST_LOG="${RUST_LOG:-pda_shell=debug,info}"
 
 dbus-daemon --session --fork --address="unix:path=$RUNTIME_DIR/bus" \

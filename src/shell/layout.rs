@@ -38,6 +38,44 @@ impl Rect {
     pub const fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
         Self { x, y, width, height }
     }
+
+    pub fn right(&self) -> i32 {
+        self.x + self.width as i32
+    }
+
+    pub fn bottom(&self) -> i32 {
+        self.y + self.height as i32
+    }
+
+    pub fn contains(&self, other: &Rect) -> bool {
+        other.x >= self.x && other.y >= self.y && other.right() <= self.right() && other.bottom() <= self.bottom()
+    }
+}
+
+/// Where a window (outer frame rectangle) has to go so it lies inside
+/// `area`: shrunk to at most the area's size, then moved inside. `None` if
+/// it already fits.
+///
+/// `min` is the smallest outer size the window accepts. A window that cannot
+/// shrink enough is aligned so its bottom-right corner stays visible: that
+/// is where GTK dialogs keep their action buttons (Save, OK).
+pub fn fit_within(outer: Rect, area: Rect, min: (u32, u32)) -> Option<Rect> {
+    if area.contains(&outer) {
+        return None;
+    }
+    let width = outer.width.min(area.width).max(min.0.min(outer.width));
+    let height = outer.height.min(area.height).max(min.1.min(outer.height));
+    let x = if width > area.width {
+        area.right() - width as i32
+    } else {
+        outer.x.clamp(area.x, area.right() - width as i32)
+    };
+    let y = if height > area.height {
+        area.bottom() - height as i32
+    } else {
+        outer.y.clamp(area.y, area.bottom() - height as i32)
+    };
+    Some(Rect::new(x, y, width, height))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,9 +114,9 @@ impl Layout {
         };
         let start_menu = Rect::new(0, top as i32, menu_w, work_h);
 
-        // A shortcut cell is roughly icon + label; keep cells at least ~90px
-        // wide so labels like "Spreadsheet" fit at small font sizes.
-        let cell = (d.today_icon_px + 66).max(90);
+        // A shortcut cell is roughly icon + label: about ten characters of
+        // label per line, and never under ~90 px.
+        let cell = (d.today_icon_px + d.font_px * 5).max(90);
         let today_side_by_side = orientation == Orientation::Landscape;
         let shortcut_area = if today_side_by_side { width / 2 } else { width };
         let today_columns = (shortcut_area / cell).clamp(2, 8);
@@ -152,6 +190,16 @@ mod tests {
     }
 
     #[test]
+    fn larger_text_gives_fewer_shortcut_columns() {
+        let mut d = design();
+        let compact = Layout::compute(600, 1024, &d).today_columns;
+        d.font_px = 16;
+        d.today_icon_px = 32;
+        let readable = Layout::compute(600, 1024, &d).today_columns;
+        assert!(readable < compact, "{readable} < {compact}");
+    }
+
+    #[test]
     fn oversized_bars_are_clamped() {
         let mut d = design();
         d.top_bar_px = 500;
@@ -159,6 +207,36 @@ mod tests {
         let l = Layout::compute(1024, 600, &d);
         assert_eq!(l.top_bar.height, 150);
         assert_eq!(l.workarea.height, 300);
+    }
+
+    #[test]
+    fn fitting_windows_into_the_work_area() {
+        let wa = Rect::new(0, 24, 600, 974);
+        let any = (0, 0);
+        // Already inside: nothing to do.
+        assert_eq!(fit_within(Rect::new(10, 100, 300, 200), wa, any), None);
+        // A file chooser wider than the portrait screen that can shrink.
+        assert_eq!(fit_within(Rect::new(-100, 200, 800, 570), wa, any), Some(Rect::new(0, 200, 600, 570)));
+        // Hanging below the command bar: moved up, size kept.
+        assert_eq!(fit_within(Rect::new(50, 800, 400, 300), wa, any), Some(Rect::new(50, 698, 400, 300)));
+        // Covering the status bar.
+        assert_eq!(fit_within(Rect::new(50, 0, 400, 300), wa, any), Some(Rect::new(50, 24, 400, 300)));
+        // Larger than the area in both directions.
+        assert_eq!(fit_within(Rect::new(-5, -5, 2000, 2000), wa, any), Some(wa));
+    }
+
+    #[test]
+    fn dialogs_that_cannot_shrink_keep_their_buttons_visible() {
+        let wa = Rect::new(0, 24, 600, 974);
+        // Gnumeric's Save As needs 667 px with its frame: it stays that wide
+        // and is aligned right, so Save (bottom right) remains on screen.
+        let fit = fit_within(Rect::new(0, 83, 667, 881), wa, (667, 450)).unwrap();
+        assert_eq!(fit, Rect::new(-67, 83, 667, 881));
+        assert_eq!(fit.right(), wa.right());
+        // Too tall as well: the bottom edge (buttons) stays above the bar.
+        let fit = fit_within(Rect::new(0, 0, 700, 1200), Rect::new(0, 24, 1024, 550), (700, 600)).unwrap();
+        assert_eq!(fit.bottom(), 574);
+        assert_eq!(fit.height, 600);
     }
 
     #[test]

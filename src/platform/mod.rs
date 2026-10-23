@@ -15,6 +15,8 @@ pub struct AppWindow {
     /// WM_CLASS class part, e.g. "Mousepad". Used for icons and fallbacks.
     pub app_class: String,
     pub pid: Option<u32>,
+    /// `_NET_WM_STATE_FULLSCREEN`: the window covers the bars.
+    pub fullscreen: bool,
 }
 
 impl AppWindow {
@@ -42,6 +44,7 @@ pub trait WindowSystem {
     fn activate(&self, id: WindowId);
     fn close(&self, id: WindowId);
     fn show_desktop(&self, on: bool);
+    fn set_fullscreen(&self, id: WindowId, on: bool);
 }
 
 /// How one of the shell's own windows should be treated by the window manager.
@@ -54,4 +57,7 @@ pub enum SurfaceRole {
     Desktop,
     /// Transient shell surface above applications (the Start menu).
     Overlay,
+    /// Unmanaged surface above everything, even full-screen windows (the
+    /// "Exit full screen" button).
+    Escape,
 }

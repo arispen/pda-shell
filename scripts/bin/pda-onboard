@@ -1,0 +1,69 @@
+#!/usr/bin/python3
+"""Start Onboard (the distribution's package, unmodified on disk) with a
+workaround for Debian 13.
+
+Onboard 1.4.1 on Python 3.12+ cannot type any key that is defined by its
+character rather than a keycode (".", "=", "*", "(", ":", "@", ... on the
+symbol layers): its C extension's keysym_from_unicode() fails with
+"SystemError: argument 1 (impossible<bad format char>)" because it parses
+its argument with a format code Python 3.12 removed. Letters and digits are
+keycode keys and work.
+
+When that failure is detected, the character is converted to its X keysym
+here (Latin-1 keysyms equal the code point, all others are 0x01000000 +
+code point) and sent through Onboard's own, working keysym path. With a
+fixed Onboard this launcher changes nothing.
+
+The shell starts this through `[keyboard] command` (config/pda-shell.toml);
+dev-session.sh puts scripts/bin on PATH.
+"""
+import sys
+
+from Onboard.Version import require_gi_versions
+
+require_gi_versions()  # GTK 3, before anything imports another version
+
+from gi.repository import GLib  # noqa: E402
+from Onboard.Exceptions import chain_handler  # noqa: E402
+
+sys.excepthook = chain_handler
+# Same program name (and so WM_CLASS) as /usr/bin/onboard: the window
+# manager rules and the shell recognise the keyboard window by it.
+sys.argv[0] = "onboard"
+GLib.set_prgname("onboard")
+
+
+def unicode_keysym(char):
+    cp = ord(char)
+    if 0x20 <= cp <= 0x7E or 0xA0 <= cp <= 0xFF:
+        return cp
+    return 0x01000000 | cp
+
+
+def broken_keysym_from_unicode():
+    from Onboard import osk
+    try:
+        osk.Virtkey().keysym_from_unicode("a")
+        return False
+    except SystemError:
+        return True
+
+
+if broken_keysym_from_unicode():
+    from Onboard import Keyboard
+
+    def press_unicode(self, char):
+        if self._vk:
+            self.press_keysym(unicode_keysym(char))
+
+    def release_unicode(self, char):
+        if self._vk:
+            self.release_keysym(unicode_keysym(char))
+
+    Keyboard.KeySynthVirtkey.press_unicode = press_unicode
+    Keyboard.KeySynthVirtkey.release_unicode = release_unicode
+    print("pda-onboard: working around keysym_from_unicode (Onboard on Python 3.12+)", file=sys.stderr)
+
+from Onboard.OnboardGtk import OnboardGtk  # noqa: E402
+
+OnboardGtk()

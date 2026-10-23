@@ -17,9 +17,9 @@ this panel: the screen size is read at start-up and every measurement lives in
 
 ## What is hardware-dependent and not validated yet
 
-- **Readability and target sizes.** Font sizes (12 px body, 10 px secondary)
-  and bar heights (24/26 px) were chosen for density; they must be re-judged
-  on the real 237 ppi panel with a stylus.
+- **Readability and target sizes.** Three density profiles (compact,
+  balanced, readable) are ready to compare on the real 237 ppi panel with a
+  stylus; physical sizes are in [ergonomics.md](ergonomics.md).
 - **Touch input path.** The USB resistive controller should appear as an
   evdev absolute pointer. Expected steps when it arrives:
   1. Identify it with `libinput list-devices` / `evtest`.

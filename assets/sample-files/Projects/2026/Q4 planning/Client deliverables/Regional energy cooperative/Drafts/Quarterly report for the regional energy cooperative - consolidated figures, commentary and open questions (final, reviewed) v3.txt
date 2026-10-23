@@ -1,0 +1,2 @@
+Draft text with a deliberately long file name.
+Used to check ellipsis in Thunar, the Open/Save dialogs and the shell's title bar.
