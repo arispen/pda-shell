@@ -35,7 +35,7 @@ SESSION_PKGS=(
     xserver-xephyr xvfb openbox
     x11-utils x11-xserver-utils x11-apps xdotool wmctrl
     imagemagick dbus-x11 dbus-user-session at-spi2-core
-    adwaita-icon-theme fonts-dejavu-core
+    adwaita-icon-theme fonts-dejavu-core fonts-wine librsvg2-common
     desktop-file-utils shared-mime-info xdg-utils
     onboard gir1.2-atspi-2.0
 )
@@ -50,6 +50,18 @@ if [ "$MINIMAL" -eq 0 ]; then PKGS+=("${APP_PKGS[@]}"); fi
 export DEBIAN_FRONTEND=noninteractive
 $SUDO apt-get update
 $SUDO apt-get install -y --no-install-recommends "${PKGS[@]}"
+
+# Wine's Tahoma clone (LGPL) is the shell's and the programs' default font.
+# fonts-wine keeps its files outside the fontconfig path; register only
+# Tahoma, not Wine's bitmap and symbol fonts.
+$SUDO mkdir -p /usr/local/share/fonts/pda-shell
+$SUDO ln -sf /usr/share/wine/fonts/tahoma.ttf /usr/share/wine/fonts/tahomabd.ttf /usr/local/share/fonts/pda-shell/
+$SUDO fc-cache -f /usr/local/share/fonts/pda-shell >/dev/null
+
+# Firefox scaling exception (see the file); only when Firefox is installed.
+if [ -d /etc/firefox-esr ]; then
+    $SUDO install -m 644 "$(dirname "$0")/../config/firefox/pda-shell.js" /etc/firefox-esr/pda-shell.js
+fi
 
 echo
 echo "Installed. Toolchain: $(rustc --version), $(cargo --version)"

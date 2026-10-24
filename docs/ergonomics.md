@@ -1,6 +1,7 @@
-# Ergonomics: physical sizes and density profiles
+# Ergonomics: physical sizes, density profiles and app scaling
 
-Milestone 6 calibration notes. Every measurement below is computed for the
+Milestone 6 calibration notes, extended for POC 0.3 (the `pocketpc` profile
+and session-wide scaling of programs). Every measurement below is computed for the
 target panel, not for the monitor the screenshots are viewed on.
 
 ## The target panel
@@ -24,42 +25,99 @@ pixels.
 
 ## Shell tokens per profile
 
-`config/pda-shell.toml` defines three profiles (`[density.*]`), selected with
-`design.density`, `dev-session.sh --density NAME` or `PDA_SHELL_DENSITY`.
-Each token stays independent; a profile only overrides what it lists.
+`config/pda-shell.toml` defines four profiles (`[density.*]`), selected with
+`design.density` (the file selects **`pocketpc`**), `dev-session.sh --density
+NAME` or `PDA_SHELL_DENSITY`. Each token stays independent; a profile only
+overrides what it lists. Settings → System → Screen shows the active values
+in pixels and millimetres.
 
-| Token | compact | balanced | readable | compact mm | balanced mm | readable mm |
-|---|---:|---:|---:|---:|---:|---:|
-| `font_px` (body text, em size) | 12 | 14 | 16 | 1.28 | 1.50 | 1.71 |
-| `small_font_px` (paths, dates) | 10 | 11 | 13 | 1.07 | 1.18 | 1.39 |
-| `title_font_px` (status bar) | 12 | 14 | 16 | 1.28 | 1.50 | 1.71 |
-| `date_font_px` (Today date) | 16 | 19 | 22 | 1.71 | 2.03 | 2.35 |
-| `top_bar_px` | 24 | 30 | 36 | 2.57 | 3.21 | 3.85 |
-| `bottom_bar_px` | 26 | 32 | 40 | 2.78 | 3.42 | 4.28 |
-| `icon_px` (bars, lists) | 16 | 18 | 22 | 1.71 | 1.93 | 2.35 |
-| `today_icon_px` | 24 | 28 | 32 | 2.57 | 3.00 | 3.42 |
-| `row_px` (list rows) | 20 | 28 | 34 | 2.14 | 3.00 | 3.64 |
-| `target_px` (bar buttons, switcher, menus) | 24 | 32 | 38 | 2.57 | 3.42 | 4.07 |
+| Token | compact | balanced | readable | **pocketpc** | compact mm | readable mm | **pocketpc mm** |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `font_px` (body text, em size) | 12 | 14 | 16 | **22** | 1.28 | 1.71 | **2.35** |
+| `small_font_px` (paths, dates) | 10 | 11 | 13 | **18** | 1.07 | 1.39 | **1.93** |
+| `title_font_px` (status bar) | 12 | 14 | 16 | **22** | 1.28 | 1.71 | **2.35** |
+| `date_font_px` (Today date) | 16 | 19 | 22 | **26** | 1.71 | 2.35 | **2.78** |
+| `top_bar_px` | 24 | 30 | 36 | **48** | 2.57 | 3.85 | **5.14** |
+| `bottom_bar_px` | 26 | 32 | 40 | **50** | 2.78 | 4.28 | **5.35** |
+| `icon_px` (bars, lists, Start menu) | 16 | 18 | 22 | **28** | 1.71 | 2.35 | **3.00** |
+| `today_icon_px` (Today, Programs, Settings) | 24 | 28 | 32 | **44** | 2.57 | 3.42 | **4.71** |
+| `row_px` (list rows) | 20 | 28 | 34 | **44** | 2.14 | 3.64 | **4.71** |
+| `target_px` (bar buttons, switcher, menus) | 24 | 32 | 38 | **46** | 2.57 | 4.07 | **4.92** |
+| `start_menu_width_px` | 300 | 340 | 380 | **400** | | | |
+| `app_dpi` (programs, see below) | 96 | 96 | 96 | **144** | | | |
 
-Font sizes are em sizes; the x-height of DejaVu Sans is about 0.55 em, so
-12 px text has lowercase letters about 0.7 mm tall on the panel.
+The `pocketpc` values are the starting hypotheses of issue #4 (body ~22 px,
+secondary ~18 px, bars ~48/50 px, rows ~44 px, targets ~46 px, Today icons
+~44 px). They match Pocket PC 2003's *physical* sizes: 8 pt Tahoma at
+≈ 2.4 mm and menu rows of 3.6–4 mm on a 3.5" QVGA screen. They are to be
+tuned with the stylus on the real panel; nothing here has been judged there.
+
+Font sizes are em sizes; Tahoma's x-height is about 0.55 em, so 22 px text
+has lowercase letters about 1.3 mm tall on the panel.
 
 For comparison, print: 12 px on the panel is the em size of 3.6 pt type,
-16 px of 4.9 pt, 18 px of 5.5 pt. A newspaper uses 8–9 pt.
+22 px of 6.7 pt. A newspaper uses 8–9 pt.
 
-## Applications
+Derived layout rules (`shell::layout`):
 
-The desktop applications do not use the shell's tokens. GTK 3 programs
-(Thunar, Gnumeric, Mousepad, Atril) render their default 10 pt font at 96 dpi
-as 13.3 px, **1.4 mm** on the panel, and their toolbar buttons are 35–37 px
-(**3.7–4 mm**), comparable to the readable profile's targets. Firefox renders
-16 px page text (1.7 mm) and 32 px toolbar buttons.
+- Icon grids (Programs, Settings, Favorites) use cells of
+  `today_icon_px + 4 × font_px` (at least 90 px): **4 columns** in portrait
+  and 7 in landscape with `pocketpc`; favorites on landscape Today use half
+  the width.
+- The Start drop-down is `start_menu_width_px` wide and as tall as its
+  content, at most the work area (less while the keyboard is shown); longer
+  content scrolls.
+- Bars are capped at a quarter of the screen height.
 
-So in the compact profile the shell is denser than the applications next to
-it; in the readable profile it roughly matches their targets while its text
-is slightly larger than theirs. Making the applications' text larger is a
-session-wide setting (`Xft.dpi`, GTK settings), not a shell setting, and was
-not changed for this POC.
+## Applications: session-wide scaling
+
+The shell's tokens are pixels in its own stylesheet; programs are scaled
+separately, for the whole session, by `[design] app_dpi` and `app_font`:
+
+- The shell owns the **XSETTINGS** selection and publishes `Xft/DPI`
+  (`app_dpi`) and `Gtk/FontName` (`app_font`, "Tahoma 10"). GTK 3 programs
+  (Thunar, Mousepad, Gnumeric, Atril, Onboard), GTK 4 programs and Firefox
+  (through GTK) read them when they start.
+- It also sets the `Xft.dpi` X resource for toolkits that only read
+  resources (Xlib, Qt).
+- Nothing is written to the user's configuration; the settings end with the
+  shell. On a desktop that already runs an XSETTINGS manager the shell takes
+  the selection over and logs it.
+
+At 144 dpi a program's default 10 pt text is 20 px (2.1 mm), close to the
+shell's 22 px body text. Measured in the session (`screenshots/pocketpc/`):
+
+| Program | What scales | What does not | Notes |
+|---|---|---|---|
+| GTK 3 programs (Thunar, Mousepad, Gnumeric, Atril) | all text, and every widget sized by its text (menus, buttons, rows, tabs) | icons (16/24 px toolbar icons), fixed pixel geometry, scrollbar width | the scale is a font resolution, not a zoom: dialog layouts grow only as much as their text |
+| Firefox ESR | text of the UI and pages (Firefox turns the DPI into a text scale; it keeps 1 device pixel per CSS px) | icons, page layout widths | **exception:** held at 115 % instead of 150 %, see below |
+| Onboard | key labels | key geometry (follows the window) | |
+| The shell | nothing: it uses pixel tokens | | `app_dpi` never changes the shell |
+
+**Why not a blind 2× zoom** (`GDK_SCALE=2`): it halves the logical screen.
+A 600×1024 portrait panel would become 300×512 logical pixels, and desktop
+dialogs that already do not fit 600 px (Gnumeric's Save As needs ~665 px)
+would need twice the screen. A font resolution grows text and text-sized
+controls only, keeping icons and fixed geometry at their size.
+
+**Per-program exceptions:**
+
+- **Firefox ESR: `ui.textScaleFactor = 115`** (`config/firefox/pda-shell.js`,
+  installed into `/etc/firefox-esr/` by `setup-debian.sh`; a default the user
+  can change). At the session's 150 % its toolbars need at least 760 px, more
+  than the 600 px portrait width, so the window hung off the right edge.
+  Measured minimum widths: 760 px at 150 %, 625 px at 125 %, fits 600 px at
+  115 %. `layout.css.devPixelsPerPx` is the wrong knob here: 1.15 made the
+  minimum *larger* (867 px), because it multiplies the already scaled text.
+  Page text at 115 % is 18 px (1.9 mm).
+- Programs that hard-code pixel fonts ignore the DPI and stay small.
+
+**Minimum usable viewport.** The work area is 600×926 (portrait) and
+1024×502 (landscape) with `pocketpc` bars; with the keyboard shown it is
+600×649 and 1024×302 (measured; landscape is the hard case). Dialogs that need more
+than the work area are fitted (moved, shrunk to their minimum size, aligned
+so their bottom-right buttons stay visible) and logged as `geometry:` lines;
+see [known-limitations.md](known-limitations.md) for the measured cases.
 
 ## Results
 

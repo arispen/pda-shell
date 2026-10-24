@@ -17,9 +17,11 @@ this panel: the screen size is read at start-up and every measurement lives in
 
 ## What is hardware-dependent and not validated yet
 
-- **Readability and target sizes.** Three density profiles (compact,
-  balanced, readable) are ready to compare on the real 237 ppi panel with a
-  stylus; physical sizes are in [ergonomics.md](ergonomics.md).
+- **Readability and target sizes.** Four density profiles (compact,
+  balanced, readable, and `pocketpc`, the default since POC 0.3) are ready to
+  compare on the real 237 ppi panel with a stylus, together with the
+  programs' session-wide scale (`app_dpi`); physical sizes are in
+  [ergonomics.md](ergonomics.md) and live in Settings → System → Screen.
 - **Touch input path.** The USB resistive controller should appear as an
   evdev absolute pointer. Expected steps when it arrives:
   1. Identify it with `libinput list-devices` / `evtest`.

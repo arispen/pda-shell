@@ -6,10 +6,15 @@ session (Xvfb + Openbox, Debian 13) with the real programs, at exactly
 
 How they were made:
 
+- `screenshots/pocketpc/shell-*`: by `scripts/capture-screens.sh` (POC 0.3,
+  `pocketpc` profile, taps through the shell screens).
+- `screenshots/pocketpc/{portrait,landscape}-*`: by
+  `scripts/app-workflow-test.sh --screenshots screenshots/pocketpc` (POC 0.3).
 - `screenshots/apps/` and `screenshots/readable/`: by
   `scripts/app-workflow-test.sh` while it drove the session with pointer taps
   and the on-screen keyboard (compact profile, and `--density readable`).
-- `screenshots/profiles/`: by `scripts/capture-profiles.sh`.
+- `screenshots/profiles/`: by `scripts/capture-profiles.sh` (POC 0.2;
+  `pocketpc` added to the script since).
 
 Before each screenshot the pointer is parked on the status bar title, so a
 tooltip from the last tap does not cover the screen. On the device the
@@ -19,7 +24,51 @@ stylus leaves the pointer where it tapped and tooltips will appear (see
 Viewed 1:1 on a desktop monitor these are 2.2–2.6× larger than on the 5"
 panel; see [ergonomics.md](ergonomics.md).
 
-## Real applications (compact profile)
+## POC 0.3: before and after
+
+Same resolutions, same session, same sample files. "Before" is POC 0.2
+(compact profile, the shipped default then); "after" is POC 0.3 with the
+`pocketpc` profile (the default now). Viewed 1:1 on a desktop monitor both
+are 2.2–2.6× larger than on the panel; compare them with each other, not
+with the monitor.
+
+| Screen | Before (POC 0.2) | After (POC 0.3) |
+|---|---|---|
+| Today, portrait | [before](../screenshots/apps/portrait-01-today.png) | [after](../screenshots/pocketpc/shell-portrait-01-today.png) |
+| Today, landscape | [before](../screenshots/apps/landscape-01-today.png) | [after](../screenshots/pocketpc/shell-landscape-01-today.png) |
+| Today with programs open, portrait | [before](../screenshots/apps/portrait-12-today-with-apps.png) | [after](../screenshots/pocketpc/portrait-12-today-with-apps.png) |
+| Start, portrait | [before](../screenshots/profiles/compact-portrait-start.png) | [after](../screenshots/pocketpc/shell-portrait-02-start.png) |
+| Start, landscape | [before](../screenshots/profiles/compact-landscape-start.png) | [after](../screenshots/pocketpc/shell-landscape-02-start.png) |
+| Keyboard over Gnumeric, portrait | [before](../screenshots/apps/portrait-05-gnumeric-keyboard.png) | [after](../screenshots/pocketpc/portrait-05-gnumeric-keyboard.png) |
+| Keyboard over Mousepad, landscape | [before](../screenshots/apps/landscape-07-mousepad-keyboard.png) | [after](../screenshots/pocketpc/landscape-07-mousepad-keyboard.png) |
+| Linux program: Thunar, portrait | [before](../screenshots/apps/portrait-02-thunar-documents.png) | [after](../screenshots/pocketpc/portrait-02-thunar-documents.png) |
+| Linux program: Firefox, landscape | [before](../screenshots/apps/landscape-10-firefox-form.png) | [after](../screenshots/pocketpc/landscape-10-firefox-form.png) |
+| Gnumeric Save As (largest dialog), portrait | [before](../screenshots/apps/portrait-05b-save-as-dialog.png) | [after](../screenshots/pocketpc/portrait-05b-save-as-dialog.png) |
+
+| Before: Today | After: Today | After: Start | After: Settings |
+|---|---|---|---|
+| ![](../screenshots/apps/portrait-01-today.png) | ![](../screenshots/pocketpc/shell-portrait-01-today.png) | ![](../screenshots/pocketpc/shell-portrait-02-start.png) | ![](../screenshots/pocketpc/shell-portrait-05-settings.png) |
+
+New shell screens (POC 0.3), both orientations:
+
+| What | Portrait 600×1024 | Landscape 1024×600 |
+|---|---|---|
+| Today | [shell-portrait-01](../screenshots/pocketpc/shell-portrait-01-today.png) | [shell-landscape-01](../screenshots/pocketpc/shell-landscape-01-today.png) |
+| Start drop-down | [02](../screenshots/pocketpc/shell-portrait-02-start.png) | [02](../screenshots/pocketpc/shell-landscape-02-start.png) |
+| Programs | [03](../screenshots/pocketpc/shell-portrait-03-programs.png) | [03](../screenshots/pocketpc/shell-landscape-03-programs.png) |
+| Programs → Linux tools | [04](../screenshots/pocketpc/shell-portrait-04-linux-tools.png) | [04](../screenshots/pocketpc/shell-landscape-04-linux-tools.png) |
+| Settings | [05](../screenshots/pocketpc/shell-portrait-05-settings.png) | [05](../screenshots/pocketpc/shell-landscape-05-settings.png) |
+| Settings → About | [06](../screenshots/pocketpc/shell-portrait-06-about.png) | [06](../screenshots/pocketpc/shell-landscape-06-about.png) |
+| Settings → Screen (sizes in mm) | [07](../screenshots/pocketpc/shell-portrait-07-screen.png) | [07](../screenshots/pocketpc/shell-landscape-07-screen.png) |
+| Start → Find | [08](../screenshots/pocketpc/shell-portrait-08-start-find.png) | [08](../screenshots/pocketpc/shell-landscape-08-start-find.png) |
+| Mousepad with the keyboard | [09](../screenshots/pocketpc/shell-portrait-09-mousepad-keyboard.png) | [09](../screenshots/pocketpc/shell-landscape-09-mousepad-keyboard.png) |
+| Today with a program open | [10](../screenshots/pocketpc/shell-portrait-10-today-with-program.png) | [10](../screenshots/pocketpc/shell-landscape-10-today-with-program.png) |
+
+The whole POC 0.2 workflow with real programs, in the `pocketpc` profile,
+is in `screenshots/pocketpc/{portrait,landscape}-NN-*.png` with the same
+numbering as the table below.
+
+## POC 0.2: real applications (compact profile)
 
 | What | Portrait 600×1024 | Landscape 1024×600 |
 |---|---|---|
@@ -48,7 +97,7 @@ Required by the issue: keyboard open in **Gnumeric portrait**
 ![Gnumeric in portrait with the keyboard open](../screenshots/apps/portrait-05-gnumeric-keyboard.png)
 ![Mousepad in landscape with the keyboard open](../screenshots/apps/landscape-07-mousepad-keyboard.png)
 
-## Density profiles
+## POC 0.2: density profiles
 
 Today and the Start menu in each profile (`scripts/capture-profiles.sh`).
 

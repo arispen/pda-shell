@@ -2,8 +2,9 @@
 # It runs the same setup script a Debian developer would run.
 FROM debian:trixie
 
-COPY scripts/setup-debian.sh /tmp/setup-debian.sh
-RUN /tmp/setup-debian.sh \
+COPY scripts/setup-debian.sh /tmp/pda/scripts/setup-debian.sh
+COPY config/firefox /tmp/pda/config/firefox
+RUN /tmp/pda/scripts/setup-debian.sh \
     && apt-get install -y --no-install-recommends x11vnc locales \
     && sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen \
     && rm -rf /var/lib/apt/lists/*

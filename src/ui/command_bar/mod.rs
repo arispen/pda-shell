@@ -1,5 +1,7 @@
-//! Bottom command bar: Today, application switcher, shell context actions,
-//! keyboard toggle.
+//! Bottom command bar, a Pocket PC 2003 style menu bar: text commands on the
+//! left (Today, the running-program switcher, then commands for the current
+//! screen: Close, OK, Cancel) and the input panel (keyboard) button at the
+//! right edge.
 
 use super::ShellWindow;
 use crate::config::Config;
@@ -44,15 +46,18 @@ pub struct CommandBar {
     target_px: u32,
 }
 
-fn bar_button(icon: &str, label: Option<&str>, px: u32) -> gtk::Button {
-    let b = gtk::Button::new();
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 3);
-    content.append(&super::icon_image(None, icon, px));
-    if let Some(l) = label {
-        content.append(&gtk::Label::new(Some(l)));
-    }
-    b.set_child(Some(&content));
+/// A menu-bar command: text only, like the menus of a Pocket PC program.
+fn bar_button(label: &str) -> gtk::Button {
+    let b = gtk::Button::with_label(label);
+    b.update_property(&[gtk::accessible::Property::Label(label)]);
     b
+}
+
+/// The small "opens upwards" arrow next to menus and the input panel.
+fn arrow() -> gtk::Label {
+    let a = gtk::Label::new(Some("▴"));
+    a.add_css_class("arrow");
+    a
 }
 
 impl CommandBar {
@@ -60,17 +65,18 @@ impl CommandBar {
         let px = cfg.design.icon_px;
         let win =
             ShellWindow::new(app, "pda-shell command bar", "bar", SurfaceRole::BottomPanel, layout.bottom_bar, x11, cfg);
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, cfg.design.spacing_px as i32);
+        win.window.add_css_class("menu-bar");
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
-        let today = bar_button("go-home-symbolic", Some("Today"), px);
+        let today = bar_button("Today");
         today.set_tooltip_text(Some("Show Today"));
         let d = dispatch.clone();
         today.connect_clicked(move |_| d(Command::Shell(Event::Today)));
 
         let switcher_label = gtk::Label::new(Some("Windows"));
         let switcher_content = gtk::Box::new(gtk::Orientation::Horizontal, 3);
-        switcher_content.append(&super::icon_image(None, "view-list-symbolic", px));
         switcher_content.append(&switcher_label);
+        switcher_content.append(&arrow());
         let switcher = gtk::MenuButton::new();
         switcher.set_child(Some(&switcher_content));
         switcher.set_direction(gtk::ArrowType::Up);
@@ -124,12 +130,21 @@ impl CommandBar {
             }
         });
 
-        let context = gtk::Box::new(gtk::Orientation::Horizontal, cfg.design.spacing_px as i32);
+        // Commands for the current screen follow the switcher, on the left.
+        let context = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         context.set_hexpand(true);
-        context.set_halign(gtk::Align::End);
+        context.set_halign(gtk::Align::Start);
 
-        let keyboard = bar_button("input-keyboard-symbolic", None, px);
+        // The input panel button: the keyboard icon with an arrow, at the
+        // right edge like the Pocket PC SIP button.
+        let keyboard = gtk::Button::new();
+        keyboard.add_css_class("sip");
+        let sip = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        sip.append(&super::named_icon("pda-keyboard", (cfg.design.bottom_bar_px * 2 / 3).max(px)));
+        sip.append(&arrow());
+        keyboard.set_child(Some(&sip));
         keyboard.set_tooltip_text(Some("Show or hide the keyboard"));
+        keyboard.update_property(&[gtk::accessible::Property::Label("Input panel (keyboard)")]);
         let d = dispatch.clone();
         keyboard.connect_clicked(move |_| d(Command::Shell(Event::ToggleKeyboard)));
 
@@ -155,10 +170,12 @@ impl CommandBar {
     }
 
     pub fn set_windows(&self, entries: Vec<SwitcherEntry>) {
-        self.switcher_label.set_text(&match entries.len() {
+        let label = match entries.len() {
             0 => "Windows".to_string(),
             n => format!("Windows ({n})"),
-        });
+        };
+        self.switcher.update_property(&[gtk::accessible::Property::Label(&label)]);
+        self.switcher_label.set_text(&label);
         self.switcher.set_sensitive(!entries.is_empty());
         self.switcher_list.remove_all();
         let count = entries.len();
@@ -187,12 +204,13 @@ impl CommandBar {
             self.context.remove(&c);
         }
         for a in actions {
-            let (icon, label, cmd) = match a {
-                ContextAction::Refresh => ("view-refresh-symbolic", "Refresh", Command::Refresh),
-                ContextAction::CloseApp => ("window-close-symbolic", "Close", Command::Shell(Event::CloseActive)),
-                ContextAction::CancelMenu => ("go-previous-symbolic", "Cancel", Command::Shell(Event::DismissStartMenu)),
+            let (label, cmd) = match a {
+                ContextAction::CloseApp => ("Close", Command::Shell(Event::CloseActive)),
+                ContextAction::CancelMenu => ("Cancel", Command::Shell(Event::DismissStartMenu)),
+                ContextAction::Ok => ("OK", Command::Shell(Event::Back)),
             };
-            let b = bar_button(icon, Some(label), self.icon_px);
+            self.context.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+            let b = bar_button(label);
             let d = self.dispatch.clone();
             b.connect_clicked(move |_| d(cmd.clone()));
             self.context.append(&b);

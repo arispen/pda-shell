@@ -7,6 +7,7 @@
 //! (`geometry:` lines in the shell log).
 
 pub mod gtk_glue;
+pub mod settings;
 
 use super::{AppWindow, SurfaceRole, WindowId, WindowSnapshot, WindowSystem};
 use crate::shell::layout::{fit_within, Rect};
@@ -14,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _,
-    EventMask, PropMode, StackMode, Window,
+    CreateWindowAux, EventMask, PropMode, StackMode, Window, WindowClass,
 };
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
@@ -49,6 +50,8 @@ x11rb::atom_manager! {
         _NET_WM_STATE_FULLSCREEN,
         _NET_FRAME_EXTENTS,
         _NET_MOVERESIZE_WINDOW,
+        _XSETTINGS_SETTINGS,
+        MANAGER,
     }
 }
 
@@ -60,6 +63,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 
 pub struct X11 {
     conn: RustConnection,
+    screen: usize,
     root: Window,
     atoms: Atoms,
 }
@@ -69,7 +73,7 @@ impl X11 {
         let (conn, screen) = RustConnection::connect(None)?;
         let root = conn.setup().roots[screen].root;
         let atoms = Atoms::new(&conn)?.reply()?;
-        Ok(Self { conn, root, atoms })
+        Ok(Self { conn, screen, root, atoms })
     }
 
     fn send_root_message(&self, window: Window, kind: u32, data: [u32; 5]) -> Result<()> {
@@ -146,6 +150,54 @@ impl X11 {
     pub fn raise(&self, window: u32) -> Result<()> {
         self.conn.configure_window(window, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE))?;
         self.conn.flush()?;
+        Ok(())
+    }
+
+    /// Publish font resolution and default font to every program started
+    /// afterwards (see [`settings`]). The shell owns the XSETTINGS selection
+    /// for as long as it runs.
+    pub fn publish_settings(&self, dpi: u32, font: &str) -> Result<()> {
+        let selection = self.conn.intern_atom(false, format!("_XSETTINGS_S{}", self.screen).as_bytes())?.reply()?.atom;
+        let previous = self.conn.get_selection_owner(selection)?.reply()?.owner;
+        if previous != x11rb::NONE {
+            log::warn!("replacing the XSETTINGS manager {previous:#x}");
+        }
+        let owner = self.conn.generate_id()?;
+        self.conn.create_window(
+            0,
+            owner,
+            self.root,
+            -1,
+            -1,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            0,
+            &CreateWindowAux::new(),
+        )?;
+        let blob = settings::xsettings_blob(0, &settings::session_settings(dpi, font));
+        let a = &self.atoms;
+        self.conn.change_property8(PropMode::REPLACE, owner, a._XSETTINGS_SETTINGS, a._XSETTINGS_SETTINGS, &blob)?;
+        self.conn.set_selection_owner(owner, selection, CURRENT_TIME)?;
+        let manager = ClientMessageEvent::new(32, self.root, a.MANAGER, [CURRENT_TIME, selection, owner, 0, 0]);
+        self.conn.send_event(false, self.root, EventMask::STRUCTURE_NOTIFY, manager)?;
+
+        // Toolkits without XSETTINGS (Xlib, Qt) read the Xft.dpi resource.
+        let existing = self
+            .conn
+            .get_property(false, self.root, AtomEnum::RESOURCE_MANAGER, AtomEnum::STRING, 0, 1 << 16)?
+            .reply()?;
+        let merged = settings::merge_resources(&String::from_utf8_lossy(&existing.value), &[("Xft.dpi", dpi.to_string())]);
+        self.conn.change_property8(
+            PropMode::REPLACE,
+            self.root,
+            AtomEnum::RESOURCE_MANAGER,
+            AtomEnum::STRING,
+            merged.as_bytes(),
+        )?;
+        self.conn.flush()?;
+        log::info!("published application settings: {dpi} dpi, font {font:?}");
         Ok(())
     }
 

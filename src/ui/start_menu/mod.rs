@@ -1,33 +1,47 @@
-//! Start menu: searchable list of installed programs plus system actions.
-//! Drops down from the top-left corner like the Pocket PC Start menu.
+//! Start menu: a compact drop-down under the Start button, laid out like the
+//! Pocket PC 2003 Start menu: a strip of recently started programs, Today,
+//! the favorites, then Programs, Settings and Find. End session sits at the
+//! bottom in a quieter style.
 //!
-//! Technical utilities and settings dialogs are left out of the list (see
-//! `[start_menu] hidden`); search finds every installed program, and an
-//! "Other programs" row at the end lists the rest.
+//! Search is still there but not the first impression: "Find" (or simply
+//! typing while the menu is open) turns the menu into a search over every
+//! installed program, technical utilities included.
 
 use super::{MenuItem, ShellWindow};
 use crate::apps::{self, AppEntry};
 use crate::config::Config;
 use crate::platform::x11::X11;
 use crate::platform::SurfaceRole;
-use crate::shell::layout::Layout;
-use crate::shell::state::Event;
+use crate::shell::layout::{Layout, Rect};
+use crate::shell::state::{Event, Page};
 use crate::shell::{Command, Dispatch};
 use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-const OTHER_ROW: &str = "__other_programs__";
+const ROW_TODAY: &str = "__today__";
+const ROW_PROGRAMS: &str = "__programs__";
+const ROW_SETTINGS: &str = "__settings__";
+const ROW_FIND: &str = "__find__";
+const ROW_END: &str = "__end_session__";
 
 pub struct StartMenu {
     pub win: ShellWindow,
     cfg: Config,
     dispatch: Dispatch,
+    recent: gtk::Box,
     search: gtk::SearchEntry,
+    scroller: gtk::ScrolledWindow,
     list: gtk::ListBox,
     apps: RefCell<Vec<AppEntry>>,
     shortcuts: Rc<RefCell<Vec<String>>>,
-    show_other: Cell<bool>,
+    recent_apps: Rc<RefCell<Vec<String>>>,
+    searching: Cell<bool>,
+    /// Favorites are left out of the list because the menu would not fit
+    /// (landscape, keyboard shown); the recent strip still has them.
+    without_favorites: Cell<bool>,
+    /// The space the menu may use (shrinks while the keyboard is shown).
+    available: Cell<Rect>,
 }
 
 impl StartMenu {
@@ -38,81 +52,77 @@ impl StartMenu {
         cfg: &Config,
         dispatch: Dispatch,
         shortcuts: Rc<RefCell<Vec<String>>>,
+        recent_apps: Rc<RefCell<Vec<String>>>,
     ) -> Rc<Self> {
         let win = ShellWindow::new(app, "Start", "start-menu", SurfaceRole::Overlay, layout.start_menu, x11, cfg);
         win.window.set_hide_on_close(true);
 
+        let recent = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        recent.add_css_class("start-recent");
+
         let search = gtk::SearchEntry::new();
-        search.set_placeholder_text(Some("Search programs"));
+        search.set_placeholder_text(Some("Find a program"));
+        search.set_visible(false);
 
         let list = gtk::ListBox::new();
         list.add_css_class("compact");
+        list.add_css_class("targets");
+        list.set_selection_mode(gtk::SelectionMode::None);
         list.set_activate_on_single_click(true);
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
+            .propagate_natural_height(true)
             .child(&list)
             .build();
 
-        let actions = gtk::Box::new(gtk::Orientation::Horizontal, cfg.design.spacing_px as i32);
-        actions.add_css_class("system-actions");
-        actions.set_homogeneous(true);
-        let px = cfg.design.icon_px;
-        for (icon, label, cmd) in [
-            ("go-home-symbolic", "Today", Command::Shell(Event::Today)),
-            ("input-keyboard-symbolic", "Keyboard", Command::Shell(Event::ToggleKeyboard)),
-            ("system-log-out-symbolic", "End session", Command::Shell(Event::EndSession)),
-        ] {
-            let b = gtk::Button::new();
-            let content = gtk::Box::new(gtk::Orientation::Horizontal, 3);
-            content.set_halign(gtk::Align::Center);
-            content.append(&super::icon_image(None, icon, px));
-            content.append(&gtk::Label::new(Some(label)));
-            b.set_child(Some(&content));
-            let d = dispatch.clone();
-            b.connect_clicked(move |_| d(cmd.clone()));
-            actions.append(&b);
-        }
-
         let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        page.append(&recent);
         page.append(&search);
-        let title = gtk::Label::new(Some("Programs"));
-        title.add_css_class("section-title");
-        title.set_xalign(0.0);
-        page.append(&title);
         page.append(&scroller);
-        page.append(&actions);
         win.set_content(&page);
 
         let menu = Rc::new(Self {
             win,
             cfg: cfg.clone(),
             dispatch: dispatch.clone(),
+            recent,
             search,
+            scroller,
             list,
             apps: RefCell::new(Vec::new()),
             shortcuts,
-            show_other: Cell::new(false),
+            recent_apps,
+            searching: Cell::new(false),
+            without_favorites: Cell::new(false),
+            available: Cell::new(layout.start_menu),
         });
 
         let m = Rc::downgrade(&menu);
         let d = dispatch.clone();
         menu.list.connect_row_activated(move |_, row| {
-            let id = row.widget_name();
-            if id == OTHER_ROW {
-                if let Some(m) = m.upgrade() {
-                    m.show_other.set(!m.show_other.get());
-                    m.rebuild();
+            let name = row.widget_name();
+            let cmd = match name.as_str() {
+                ROW_TODAY => Command::Shell(Event::Today),
+                ROW_PROGRAMS => Command::Shell(Event::ShowPage(Page::Programs)),
+                ROW_SETTINGS => Command::Shell(Event::ShowPage(Page::Settings)),
+                ROW_END => Command::Shell(Event::EndSession),
+                ROW_FIND => {
+                    if let Some(m) = m.upgrade() {
+                        m.start_search("");
+                    }
+                    return;
                 }
-            } else {
-                d(Command::Shell(Event::Launch(id.to_string())));
-            }
+                id => Command::Shell(Event::Launch(id.to_string())),
+            };
+            d(cmd);
         });
 
         let m = Rc::downgrade(&menu);
         menu.search.connect_search_changed(move |_| {
             if let Some(m) = m.upgrade() {
-                m.rebuild();
+                if m.searching.get() {
+                    m.rebuild();
+                }
             }
         });
         let m = Rc::downgrade(&menu);
@@ -129,6 +139,23 @@ impl StartMenu {
         let d = dispatch.clone();
         menu.search.connect_stop_search(move |_| d(Command::Shell(Event::DismissStartMenu)));
 
+        // Typing while the menu is open starts a search with that text.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let m = Rc::downgrade(&menu);
+        keys.connect_key_pressed(move |_, key, _, state| {
+            let Some(m) = m.upgrade() else { return glib::Propagation::Proceed };
+            let plain = !state.intersects(gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::ALT_MASK);
+            match key.to_unicode().filter(|c| plain && !c.is_control()) {
+                Some(c) if !m.searching.get() => {
+                    m.start_search(&c.to_string());
+                    glib::Propagation::Stop
+                }
+                _ => glib::Propagation::Proceed,
+            }
+        });
+        menu.win.window.add_controller(keys);
+
         let d = dispatch;
         menu.win.window.connect_is_active_notify(move |w| {
             if !w.is_active() && w.is_visible() {
@@ -140,49 +167,104 @@ impl StartMenu {
 
     pub fn set_apps(&self, apps: Vec<AppEntry>) {
         *self.apps.borrow_mut() = apps;
+        self.refresh();
+    }
+
+    /// Rebuild after favorites, recent programs or installs changed.
+    pub fn refresh(&self) {
+        self.rebuild_recent();
         self.rebuild();
     }
 
-    fn rebuild(&self) {
-        self.list.remove_all();
+    fn rebuild_recent(&self) {
+        while let Some(c) = self.recent.first_child() {
+            self.recent.remove(&c);
+        }
         let apps = self.apps.borrow();
-        let query = self.search.text();
-        let hidden = &self.cfg.start_menu.hidden;
-        if query.trim().is_empty() {
-            let (technical, programs): (Vec<&AppEntry>, Vec<&AppEntry>) =
-                apps::search(&apps, "").into_iter().partition(|a| apps::is_technical(a, hidden));
-            for entry in programs {
-                self.append_entry(entry);
+        // Recently started programs; the favorites until there are any.
+        let mut ids = self.recent_apps.borrow().clone();
+        for id in self.shortcuts.borrow().iter() {
+            if ids.len() < crate::shell::shortcuts::RECENT_APPS && !ids.contains(id) {
+                ids.push(id.clone());
             }
-            if !technical.is_empty() {
-                let row = gtk::ListBoxRow::new();
-                row.set_widget_name(OTHER_ROW);
-                row.add_css_class("more");
-                row.update_property(&[gtk::accessible::Property::Label("Other programs and settings")]);
-                let arrow = if self.show_other.get() { "▾" } else { "▸" };
-                let l = gtk::Label::new(Some(&format!("{arrow} Other programs and settings ({})", technical.len())));
-                l.set_xalign(0.0);
-                row.set_child(Some(&l));
-                self.list.append(&row);
-                if self.show_other.get() {
-                    for entry in technical {
-                        self.append_entry(entry);
-                    }
-                }
-            }
+        }
+        for entry in apps::resolve_shortcuts(&apps, &ids) {
+            let b = gtk::Button::new();
+            b.set_child(Some(&super::icon_image(apps::gicon(entry).as_ref(), "application-x-executable", self.cfg.design.icon_px)));
+            b.set_tooltip_text(Some(&entry.name));
+            b.update_property(&[gtk::accessible::Property::Label(&entry.name)]);
+            let (d, id) = (self.dispatch.clone(), entry.id.clone());
+            b.connect_clicked(move |_| d(Command::Shell(Event::Launch(id.clone()))));
+            self.recent.append(&b);
+        }
+        self.recent.set_visible(self.recent.first_child().is_some());
+    }
+
+    fn rebuild(&self) {
+        self.without_favorites.set(false);
+        self.fill();
+        // Every command must be visible without scrolling; drop the
+        // favorites rather than hide End session below the edge.
+        if !self.searching.get() && self.natural_height() > self.available.get().height {
+            self.without_favorites.set(true);
+            self.fill();
+        }
+        self.fit();
+    }
+
+    fn fill(&self) {
+        self.list.remove_all();
+        if self.searching.get() {
+            self.rebuild_search();
         } else {
-            for entry in apps::search(&apps, &query) {
+            self.rebuild_menu();
+        }
+    }
+
+    fn rebuild_menu(&self) {
+        let apps = self.apps.borrow();
+        self.append_item(ROW_TODAY, "pda-today", "Today");
+        if !self.without_favorites.get() {
+            for entry in apps::resolve_shortcuts(&apps, &self.shortcuts.borrow()) {
                 self.append_entry(entry);
             }
+        }
+        self.append_item(ROW_PROGRAMS, "pda-programs", "Programs").set_header(Some(&separator()));
+        self.append_item(ROW_SETTINGS, "pda-settings", "Settings");
+        self.append_item(ROW_FIND, "pda-find", "Find…");
+        let end = self.append_item(ROW_END, "pda-power", "End session");
+        end.add_css_class("minor");
+        end.set_header(Some(&separator()));
+    }
+
+    fn rebuild_search(&self) {
+        let apps = self.apps.borrow();
+        for entry in apps::search(&apps, &self.search.text()) {
+            self.append_entry(entry);
         }
         if self.list.row_at_index(0).is_none() {
             let row = gtk::ListBoxRow::new();
             row.set_activatable(false);
             let l = gtk::Label::new(Some("No matching programs"));
             l.add_css_class("dim");
+            l.set_xalign(0.0);
             row.set_child(Some(&l));
             self.list.append(&row);
         }
+    }
+
+    fn append_item(&self, name: &str, icon: &str, label: &str) -> gtk::ListBoxRow {
+        let row = gtk::ListBoxRow::new();
+        row.set_widget_name(name);
+        row.update_property(&[gtk::accessible::Property::Label(label.trim_end_matches('…'))]);
+        let b = gtk::Box::new(gtk::Orientation::Horizontal, self.cfg.design.padding_px as i32);
+        b.append(&super::named_icon(icon, self.cfg.design.icon_px));
+        let l = gtk::Label::new(Some(label));
+        l.set_xalign(0.0);
+        b.append(&l);
+        row.set_child(Some(&b));
+        self.list.append(&row);
+        row
     }
 
     fn append_entry(&self, entry: &AppEntry) {
@@ -190,21 +272,15 @@ impl StartMenu {
         let row = gtk::ListBoxRow::new();
         row.set_widget_name(&entry.id);
         row.update_property(&[gtk::accessible::Property::Label(&entry.name)]);
-        let b = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let b = gtk::Box::new(gtk::Orientation::Horizontal, self.cfg.design.padding_px as i32);
         b.append(&super::icon_image(apps::gicon(entry).as_ref(), "application-x-executable", px));
         let name = gtk::Label::new(Some(&entry.name));
         name.set_xalign(0.0);
+        name.set_hexpand(true);
         name.set_ellipsize(gtk::pango::EllipsizeMode::End);
         b.append(&name);
-        if !entry.generic_name.is_empty() && entry.generic_name != entry.name {
-            let g = gtk::Label::new(Some(&entry.generic_name));
-            g.add_css_class("dim");
-            g.set_hexpand(true);
-            g.set_xalign(1.0);
-            g.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            b.append(&g);
-        }
         row.set_child(Some(&b));
+        row.set_tooltip_text(Some(&entry.name));
 
         let (id, dsp, shortcuts) = (entry.id.clone(), self.dispatch.clone(), self.shortcuts.clone());
         super::context_menu(&row, &self.win.feedback, &self.cfg, move || {
@@ -214,23 +290,61 @@ impl StartMenu {
             vec![
                 MenuItem::new("Open", move || a(Command::Shell(Event::Launch(ia.clone())))),
                 if pinned {
-                    MenuItem::new("Remove from Today", move || b(Command::RemoveShortcut(ib.clone())))
+                    MenuItem::new("Remove from favorites", move || b(Command::RemoveShortcut(ib.clone())))
                 } else {
-                    MenuItem::new("Add to Today", move || b(Command::AddShortcut(ib.clone())))
+                    MenuItem::new("Add to favorites", move || b(Command::AddShortcut(ib.clone())))
                 },
             ]
         });
         self.list.append(&row);
     }
 
-    pub fn show(&self) {
-        self.show_other.set(false);
-        self.search.set_text("");
-        self.win.window.present();
+    fn start_search(&self, text: &str) {
+        self.searching.set(true);
+        self.recent.set_visible(false);
+        self.search.set_visible(true);
+        self.search.set_text(text);
         self.search.grab_focus();
+        self.search.set_position(-1);
+        self.rebuild();
+    }
+
+    /// As tall as the content, at most the available space; a search uses
+    /// all of it so results do not make the menu jump.
+    fn fit(&self) {
+        let area = self.available.get();
+        self.scroller.set_max_content_height(area.height as i32);
+        let height = if self.searching.get() { area.height } else { self.natural_height().min(area.height) };
+        self.win.set_rect(Rect { height, ..area });
+    }
+
+    /// Height the menu content wants, with the drop-down's border.
+    fn natural_height(&self) -> u32 {
+        let page = self.scroller.parent().expect("menu page");
+        let (_, natural, _, _) = page.measure(gtk::Orientation::Vertical, self.available.get().width as i32);
+        natural.max(0) as u32 + 2
+    }
+
+    /// The space the menu may use, e.g. less while the keyboard is shown.
+    pub fn set_available(&self, area: Rect) {
+        self.available.set(area);
+        self.fit();
+    }
+
+    pub fn show(&self) {
+        self.searching.set(false);
+        self.search.set_visible(false);
+        self.search.set_text("");
+        self.refresh();
+        self.win.window.present();
+        self.list.grab_focus();
     }
 
     pub fn hide(&self) {
         self.win.window.set_visible(false);
     }
+}
+
+fn separator() -> gtk::Separator {
+    gtk::Separator::new(gtk::Orientation::Horizontal)
 }

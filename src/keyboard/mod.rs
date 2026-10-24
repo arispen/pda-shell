@@ -41,7 +41,7 @@ pub fn layout_file(name: &str, system_dir: &Path) -> Option<PathBuf> {
 pub fn keyboard_rect(layout: &Layout) -> Rect {
     let h = match layout.orientation {
         Orientation::Portrait => (layout.workarea.height * 30 / 100).clamp(160, 320),
-        Orientation::Landscape => (layout.workarea.height * 42 / 100).clamp(150, 260),
+        Orientation::Landscape => (layout.workarea.height * 40 / 100).clamp(150, 260),
     };
     let wa = layout.workarea;
     Rect::new(wa.x, wa.y + (wa.height - h) as i32, wa.width, h)

@@ -21,6 +21,10 @@ pub enum Event {
     /// The "Exit full screen" button.
     LeaveFullscreen,
     Launch(String),
+    /// Show one of the shell's own screens (Today, Programs, Settings...).
+    ShowPage(Page),
+    /// "OK" in the command bar: up one level from a shell screen.
+    Back,
     EndSession,
     /// Applications did not all close in time; stay in the session.
     EndSessionTimeout,
@@ -41,6 +45,8 @@ pub enum Effect {
     /// leaves the applications shrunk.
     ReserveKeyboard(bool),
     SetFullscreen(WindowId, bool),
+    /// Switch the desktop surface to another shell screen.
+    ShowPage(Page),
     /// Arm the end-session timeout.
     StartEndSessionTimer,
     Quit,
@@ -52,12 +58,67 @@ pub enum View {
     App(WindowId),
 }
 
+/// The shell's own screens, all shown on the desktop surface below the
+/// applications. Pocket PC 2003 had the same set: Today, the Programs
+/// folder, and Settings with its applets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Page {
+    Today,
+    Programs,
+    /// Technical utilities and desktop settings dialogs ("advanced").
+    LinuxTools,
+    Settings,
+    About,
+    Screen,
+    Network,
+    /// The desktop environment's own settings dialogs.
+    LinuxSettings,
+}
+
+impl Page {
+    pub const ALL: [Page; 8] = [
+        Page::Today,
+        Page::Programs,
+        Page::LinuxTools,
+        Page::Settings,
+        Page::About,
+        Page::Screen,
+        Page::Network,
+        Page::LinuxSettings,
+    ];
+
+    /// Shown in the status bar.
+    pub fn title(self) -> &'static str {
+        match self {
+            Page::Today => "Today",
+            Page::Programs => "Programs",
+            Page::LinuxTools => "Linux tools",
+            Page::Settings => "Settings",
+            Page::About => "About",
+            Page::Screen => "Screen",
+            Page::Network => "Network",
+            Page::LinuxSettings => "Linux settings",
+        }
+    }
+
+    /// Where "OK" leads.
+    pub fn parent(self) -> Option<Page> {
+        match self {
+            Page::Today => None,
+            Page::Programs | Page::Settings => Some(Page::Today),
+            Page::LinuxTools => Some(Page::Programs),
+            Page::About | Page::Screen | Page::Network | Page::LinuxSettings => Some(Page::Settings),
+        }
+    }
+}
+
 /// Shell-specific commands offered in the command bar for the current view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextAction {
-    Refresh,
     CloseApp,
     CancelMenu,
+    /// Leave a shell screen (Programs, Settings, ...).
+    Ok,
 }
 
 #[derive(Debug)]
@@ -68,6 +129,8 @@ pub struct ShellState {
     mru: Vec<WindowId>,
     active: Option<WindowId>,
     today: bool,
+    /// The shell screen on the desktop surface.
+    page: Page,
     start_menu_open: bool,
     /// The keyboard is shown, or was asked to show (drives the toggle).
     keyboard_visible: bool,
@@ -96,6 +159,7 @@ impl ShellState {
             mru: Vec::new(),
             active: None,
             today: true,
+            page: Page::Today,
             start_menu_open: false,
             keyboard_visible: false,
             keyboard_reserved: false,
@@ -109,6 +173,10 @@ impl ShellState {
             Some(id) if !self.today => View::App(id),
             _ => View::Today,
         }
+    }
+
+    pub fn page(&self) -> Page {
+        self.page
     }
 
     pub fn start_menu_open(&self) -> bool {
@@ -148,7 +216,7 @@ impl ShellState {
             return n.clone();
         }
         match self.view() {
-            View::Today => "Today".into(),
+            View::Today => self.page.title().into(),
             View::App(id) => self
                 .window(id)
                 .map(|w| w.display_title().to_string())
@@ -161,7 +229,8 @@ impl ShellState {
             return vec![ContextAction::CancelMenu];
         }
         match self.view() {
-            View::Today => vec![ContextAction::Refresh],
+            View::Today if self.page == Page::Today => Vec::new(),
+            View::Today => vec![ContextAction::Ok],
             View::App(_) => vec![ContextAction::CloseApp],
         }
     }
@@ -178,11 +247,11 @@ impl ShellState {
                 fx.push(Effect::ShowStartMenu(self.start_menu_open));
             }
             Event::DismissStartMenu => self.close_menu(&mut fx),
-            Event::Today => {
-                self.close_menu(&mut fx);
-                if !self.today {
-                    self.today = true;
-                    fx.push(Effect::ShowDesktop(true));
+            Event::Today => self.show_page(Page::Today, &mut fx),
+            Event::ShowPage(page) => self.show_page(page, &mut fx),
+            Event::Back => {
+                if let (View::Today, Some(parent)) = (self.view(), self.page.parent()) {
+                    self.show_page(parent, &mut fx);
                 }
             }
             Event::Switch(id) => {
@@ -255,6 +324,18 @@ impl ShellState {
         if self.keyboard_reserved {
             self.keyboard_reserved = false;
             fx.push(Effect::ReserveKeyboard(false));
+        }
+    }
+
+    fn show_page(&mut self, page: Page, fx: &mut Vec<Effect>) {
+        self.close_menu(fx);
+        if self.page != page {
+            self.page = page;
+            fx.push(Effect::ShowPage(page));
+        }
+        if !self.today {
+            self.today = true;
+            fx.push(Effect::ShowDesktop(true));
         }
     }
 
@@ -339,7 +420,7 @@ mod tests {
         let s = ShellState::new();
         assert_eq!(s.view(), View::Today);
         assert_eq!(s.title(), "Today");
-        assert_eq!(s.context_actions(), vec![ContextAction::Refresh]);
+        assert!(s.context_actions().is_empty(), "Today needs no extra command");
     }
 
     #[test]
@@ -511,6 +592,54 @@ mod tests {
         assert_eq!(s.handle(snap(vec![fullscreen(1)], Some(1), false)), vec![Effect::SetFullscreen(WindowId(1), false)]);
         // Not repeated for every snapshot while the request is in flight.
         assert!(s.handle(snap(vec![fullscreen(1)], Some(1), false)).is_empty());
+    }
+
+    #[test]
+    fn programs_and_settings_are_shell_screens() {
+        let mut s = ShellState::new();
+        s.handle(Event::StartButton);
+        assert_eq!(
+            s.handle(Event::ShowPage(Page::Programs)),
+            vec![Effect::ShowStartMenu(false), Effect::ShowPage(Page::Programs)]
+        );
+        assert_eq!(s.view(), View::Today);
+        assert_eq!(s.title(), "Programs");
+        assert_eq!(s.context_actions(), vec![ContextAction::Ok]);
+        // OK goes up one level, then Today has nothing to go back to.
+        s.handle(Event::ShowPage(Page::LinuxTools));
+        assert_eq!(s.handle(Event::Back), vec![Effect::ShowPage(Page::Programs)]);
+        assert_eq!(s.handle(Event::Back), vec![Effect::ShowPage(Page::Today)]);
+        assert!(s.handle(Event::Back).is_empty());
+    }
+
+    #[test]
+    fn settings_from_an_application_shows_the_desktop() {
+        let mut s = ShellState::new();
+        s.handle(snap(vec![win(1, "a")], Some(1), false));
+        assert_eq!(
+            s.handle(Event::ShowPage(Page::About)),
+            vec![Effect::ShowPage(Page::About), Effect::ShowDesktop(true)]
+        );
+        assert_eq!(s.title(), "About");
+        assert_eq!(s.handle(Event::Back), vec![Effect::ShowPage(Page::Settings)]);
+        // Today always lands on the Today screen.
+        assert_eq!(s.handle(Event::Today), vec![Effect::ShowPage(Page::Today)]);
+    }
+
+    #[test]
+    fn ok_does_nothing_while_an_application_is_in_front() {
+        let mut s = ShellState::new();
+        s.handle(Event::ShowPage(Page::Settings));
+        s.handle(snap(vec![win(1, "a")], Some(1), false));
+        assert_eq!(s.context_actions(), vec![ContextAction::CloseApp]);
+        assert!(s.handle(Event::Back).is_empty());
+    }
+
+    #[test]
+    fn every_page_but_today_has_a_way_back() {
+        for p in Page::ALL {
+            assert_eq!(p.parent().is_none(), p == Page::Today, "{p:?}");
+        }
     }
 
     #[test]

@@ -46,7 +46,13 @@ pub struct Design {
     pub spacing_px: u32,
     pub padding_px: u32,
     pub radius_px: u32,
+    /// Width of the Start drop-down (both orientations).
     pub start_menu_width_px: u32,
+    /// Font resolution published to applications (Xft/DPI): their point
+    /// sizes scale with it. 96 leaves them at their desktop size.
+    pub app_dpi: u32,
+    /// Default font of applications (Gtk/FontName), e.g. "Tahoma 10".
+    pub app_font: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -56,6 +62,16 @@ pub struct Colors {
     pub bar_fg: String,
     pub bar_hover: String,
     pub bar_pressed: String,
+    /// Lower end of the status bar gradient (top end: `bar_bg`).
+    pub bar_bg_end: String,
+    /// Command bar (bottom): a light menu bar, gradient from `menu_bg` down
+    /// to `menu_bg_end`, with dark text.
+    pub menu_bg: String,
+    pub menu_bg_end: String,
+    pub menu_fg: String,
+    pub menu_border: String,
+    /// Thin lines between Today items and list rows.
+    pub separator: String,
     pub surface: String,
     pub surface_alt: String,
     pub text: String,
@@ -150,6 +166,8 @@ impl Default for Design {
             padding_px: 4,
             radius_px: 2,
             start_menu_width_px: 300,
+            app_dpi: 96,
+            app_font: "Sans 10".into(),
         }
     }
 }
@@ -161,6 +179,12 @@ impl Default for Colors {
             bar_fg: "#ffffff".into(),
             bar_hover: "#2d5aa0".into(),
             bar_pressed: "#0f2547".into(),
+            bar_bg_end: "#1d3f72".into(),
+            menu_bg: "#f4f5f7".into(),
+            menu_bg_end: "#d5dbe4".into(),
+            menu_fg: "#000000".into(),
+            menu_border: "#7d8ba0".into(),
+            separator: "#d9dee6".into(),
             surface: "#ffffff".into(),
             surface_alt: "#eef2f8".into(),
             text: "#101010".into(),
@@ -196,7 +220,7 @@ impl Default for TodayConfig {
                 "firefox-esr.desktop".into(),
                 "xfce4-terminal.desktop".into(),
             ],
-            recent_documents: 6,
+            recent_documents: 4,
         }
     }
 }
@@ -377,7 +401,7 @@ mod tests {
     fn shipped_profiles_are_complete_and_ordered() {
         let text = include_str!("../config/pda-shell.toml");
         let names = Config::density_profiles(text);
-        for name in ["compact", "balanced", "readable"] {
+        for name in ["compact", "balanced", "readable", "pocketpc"] {
             assert!(names.iter().any(|n| n == name), "missing profile {name}");
         }
         let get = |n: &str| Config::parse_with_density(text, Some(n)).unwrap().design;
@@ -386,6 +410,21 @@ mod tests {
         assert!(c.target_px < b.target_px && b.target_px < r.target_px);
         assert!((16..=18).contains(&r.font_px), "readable candidate text is 16-18 px");
         assert!((36..=40).contains(&r.target_px), "readable candidate targets are 36-40 px");
+    }
+
+    #[test]
+    fn pocketpc_is_the_shipped_default_at_device_scale() {
+        let text = include_str!("../config/pda-shell.toml");
+        assert!(Config::density_profiles(text).iter().any(|n| n == "pocketpc"));
+        let d = Config::parse_with_density(text, None).unwrap().design;
+        assert_eq!(d.density, "pocketpc", "the file selects the Pocket PC profile");
+        let readable = Config::parse_with_density(text, Some("readable")).unwrap().design;
+        assert!(d.font_px > readable.font_px && d.target_px > readable.target_px);
+        // The issue's starting hypotheses (tunable on the panel).
+        assert!((20..=24).contains(&d.font_px), "body text ~22 px");
+        assert!((44..=50).contains(&d.target_px), "targets ~46 px");
+        assert!((40..=48).contains(&d.row_px), "rows ~44 px");
+        assert!(d.app_dpi > 96, "applications are scaled too, not only the shell");
     }
 
     #[test]
