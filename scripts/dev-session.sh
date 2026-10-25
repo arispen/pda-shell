@@ -113,7 +113,7 @@ ln -sfn "$LOG_DIR" "$SESSION_ROOT/logs/latest"
 # file associations, Thunar list view). Bump SEED_VERSION when either
 # changes: existing homes then get the new files, but files the developer
 # already has (and may have edited) are never replaced.
-SEED_VERSION=3
+SEED_VERSION=4
 if [ "$(cat "$SESSION_HOME/.seed-version" 2>/dev/null)" != "$SEED_VERSION" ]; then
     mkdir -p "$SESSION_HOME/Documents" "$SESSION_HOME/.config" "$SESSION_HOME/.local/share" "$SESSION_HOME/.cache"
     cp -Rn "$REPO/assets/sample-files/." "$SESSION_HOME/Documents/" 2>/dev/null || true

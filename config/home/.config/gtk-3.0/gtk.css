@@ -1,0 +1,20 @@
+/* pda-shell session default for GTK 3 programs (Thunar, Mousepad,
+   Gnumeric, Atril, Firefox). Without a compositor the theme's translucent
+   tooltip renders as a solid black box; show a flat light one instead,
+   like the shell's (colours: [colors] surface, text, menu_border). */
+tooltip,
+tooltip.background,
+tooltip.background.csd {
+    background-color: #ffffff;
+    background-image: none;
+    color: #000000;
+    border: 1px solid #6f7f99;
+    border-radius: 0;
+    box-shadow: none;
+    text-shadow: none;
+}
+tooltip *,
+tooltip label {
+    color: #000000;
+    text-shadow: none;
+}

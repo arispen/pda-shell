@@ -122,7 +122,6 @@ fn bar_button(label: &str) -> gtk::Button {
 fn icon_button(icon: &str, label: &str, px: u32) -> gtk::Button {
     let b = gtk::Button::new();
     b.set_child(Some(&super::named_icon(icon, px)));
-    b.set_tooltip_text(Some(label));
     b.update_property(&[gtk::accessible::Property::Label(label)]);
     b
 }
@@ -155,7 +154,6 @@ impl CommandBar {
         let switcher = gtk::MenuButton::new();
         switcher.set_child(Some(&switcher_content));
         switcher.set_direction(gtk::ArrowType::Up);
-        switcher.set_tooltip_text(Some("Running programs"));
         let switcher_list = gtk::ListBox::new();
         switcher_list.add_css_class("compact");
         switcher_list.add_css_class("targets");
@@ -234,7 +232,6 @@ impl CommandBar {
         let keyboard = gtk::Button::new();
         keyboard.add_css_class("sip");
         keyboard.set_child(Some(&super::named_icon("pda-keyboard", (cfg.design.bottom_bar_px * 2 / 3).max(px))));
-        keyboard.set_tooltip_text(Some("Show or hide the keyboard"));
         keyboard.update_property(&[gtk::accessible::Property::Label("Input panel (keyboard)")]);
         let d = dispatch.clone();
         keyboard.connect_clicked(move |_| d(Command::Shell(Event::ToggleKeyboard)));
@@ -379,7 +376,6 @@ impl CommandBar {
             n => format!("Windows ({n})"),
         };
         self.switcher.update_property(&[gtk::accessible::Property::Label(&label)]);
-        self.switcher.set_tooltip_text(Some(&label));
         self.switcher_label.set_text(&match entries.len() {
             0 => String::new(),
             n => n.to_string(),

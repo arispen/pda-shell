@@ -153,6 +153,17 @@ window.start-menu entry {{ min-height: {row}px; padding: 1px {pad}px; margin: {p
 window.start-menu list.compact row separator {{ margin: 0; }}
 window.start-menu row.minor label {{ color: {text_dim}; }}
 
+/* Tooltips. The shell sets none (a stylus leaves the pointer where it
+   tapped, so they would pop up after every tap); GTK still shows some on
+   its own. Without a compositor GTK's translucent rounded tooltip renders
+   black, and inside a bar it inherits the bar's text colour: make it a
+   flat, opaque box with its own colours. */
+tooltip, tooltip.background {{
+    background: {surface}; color: {text}; border: 1px solid {menu_border};
+    border-radius: 0; box-shadow: none; padding: 2px {pad}px;
+}}
+tooltip label, tooltip * {{ color: {text}; font-family: {font}; font-size: {small_px}px; }}
+
 /* Popovers. Without a compositor the shadow area would render black, so
    popovers are flat with a plain border. Labels inside popovers opened from
    a bar must not inherit the bar's text colour. */
@@ -389,7 +400,7 @@ pub fn grid_button(icon: gtk::Image, label: &str) -> gtk::Button {
     l.set_max_width_chars(9);
     content.append(&l);
     button.set_child(Some(&content));
-    button.set_tooltip_text(Some(label));
+    button.update_property(&[gtk::accessible::Property::Label(label)]);
     button
 }
 

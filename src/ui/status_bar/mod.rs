@@ -35,7 +35,6 @@ impl StatusBar {
         start_content.append(&super::named_icon("pda-start", start_icon));
         start_content.append(&gtk::Label::new(Some("Start")));
         start.set_child(Some(&start_content));
-        start.set_tooltip_text(Some("Start menu"));
         start.update_property(&[gtk::accessible::Property::Label("Start")]);
         let d = dispatch.clone();
         start.connect_clicked(move |_| d(Command::StartButton));
@@ -109,7 +108,8 @@ impl StatusBar {
                 } else {
                     "network-wired-symbolic"
                 }));
-                self.network.set_tooltip_text(Some(&format!("Connected: {}", n.interface)));
+                self.network
+                    .update_property(&[gtk::accessible::Property::Label(&format!("Connected: {}", n.interface))]);
                 self.network.set_visible(true);
             }
             None => self.network.set_visible(false),

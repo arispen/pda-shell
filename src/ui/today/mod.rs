@@ -363,7 +363,7 @@ impl Today {
             text.append(&sub);
             b.append(&text);
             row.set_child(Some(&b));
-            row.set_tooltip_text(Some(&doc.path.display().to_string()));
+            row.update_property(&[gtk::accessible::Property::Description(&doc.path.display().to_string())]);
             row.update_property(&[gtk::accessible::Property::Label(&name)]);
 
             let dsp = self.dispatch.clone();

@@ -191,7 +191,6 @@ impl StartMenu {
         for entry in apps::resolve_shortcuts(&apps, &ids) {
             let b = gtk::Button::new();
             b.set_child(Some(&super::icon_image(apps::gicon(entry).as_ref(), "application-x-executable", self.cfg.design.icon_px)));
-            b.set_tooltip_text(Some(&entry.name));
             b.update_property(&[gtk::accessible::Property::Label(&entry.name)]);
             let (d, id) = (self.dispatch.clone(), entry.id.clone());
             b.connect_clicked(move |_| d(Command::Shell(Event::Launch(id.clone()))));
@@ -280,7 +279,6 @@ impl StartMenu {
         name.set_ellipsize(gtk::pango::EllipsizeMode::End);
         b.append(&name);
         row.set_child(Some(&b));
-        row.set_tooltip_text(Some(&entry.name));
 
         let (id, dsp, shortcuts) = (entry.id.clone(), self.dispatch.clone(), self.shortcuts.clone());
         super::context_menu(&row, &self.win.feedback, &self.cfg, move || {

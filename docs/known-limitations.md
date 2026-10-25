@@ -201,12 +201,14 @@ noted.
 
 ### Stylus interaction
 - **Tooltips appear after taps.** With a stylus the pointer stays where the
-  last tap was, so GTK tooltips pop up over toolbars ("Change font", "Open
-  your personal folder"). The workflow test parks the pointer on the status
-  bar before each screenshot so the screenshots show the screens, not the
-  tooltip; on the device they will appear. GTK 3 has no switch to turn
-  tooltips off; candidates are a theme rule or moving the pointer after a
-  tap in the future touch daemon.
+  last tap was, so tooltips pop up over toolbars ("Go to the home folder").
+  Since POC 0.3 the shell and its native programs set no tooltips at all,
+  and GTK's own tooltips are drawn as a flat light box: without a
+  compositor GTK's translucent tooltip rendered as a black box, blank when
+  it inherited a bar's text colour. GTK 3 programs get the same look from
+  `config/home/.config/gtk-3.0/gtk.css` (session HOME default). Programs'
+  tooltips still appear; GTK 3 has no switch to turn them off. The workflow
+  test parks the pointer on the status bar before each screenshot.
 - The "Exit full screen" button covers 152×24 px of the full-screen
   program's top-right corner while shown.
 - In full screen the keyboard stays on top of the program but the program
