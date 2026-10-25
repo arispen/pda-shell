@@ -1,14 +1,28 @@
 # pda-shell
 
-Proof of concept of a stylus-first, Pocket PC inspired shell for a pocket
-Linux computer (5" 1024×600 resistive touchscreen), running real desktop
-applications. `pda-shell` is a temporary internal name.
+Proof of concept of a stylus-first shell in the style of Pocket PC 2003 SE
+for a pocket Linux computer (5" 1024×600 resistive touchscreen), running
+real desktop applications. `pda-shell` is a temporary internal name.
 
 Stack: Debian 13, X11, Openbox, Rust + GTK 4 (gtk-rs), Onboard, x11rb for EWMH.
 
-![Gnumeric in portrait with the on-screen keyboard](screenshots/apps/portrait-05-gnumeric-keyboard.png)
+| | | |
+|---|---|---|
+| ![](screenshots/pocketpc/shell-portrait-01-today.png) | ![](screenshots/pocketpc/shell-portrait-02-start.png) | ![](screenshots/pocketpc/shell-portrait-05-settings.png) |
+| Today | Start | Settings |
 
 ## Status
+
+POC 0.3 (issue #4, P0 slice): a coherent Pocket PC 2003 SE-style
+experience. Device-scale `pocketpc` density profile (22 px text, 46 px
+targets) as the default, the same scale applied session-wide to programs
+(XSETTINGS DPI and font), a glanceable Today, a compact Start drop-down,
+Programs and Settings screens (system details moved to Settings → About),
+a blue status bar and silver menu bar, Wine's Tahoma clone and an original
+colored icon set. Before/after screenshots:
+[docs/screenshots.md](docs/screenshots.md). Not done yet (P1/P2): the
+app-specific command bar API, native Files/Notes, an integrated input panel,
+and any assessment on the physical panel.
 
 POC 0.2: real desktop programs (Thunar, Gnumeric, Mousepad, Atril, Firefox
 ESR) are edited, saved and reopened **with the pointer and the on-screen
@@ -31,7 +45,7 @@ Milestone 4 (system-wide stylus input) waits for the hardware.
 ./scripts/setup-debian.sh                          # once: toolchain, Xephyr, Openbox, apps
 ./scripts/dev-session.sh --orientation portrait    # 600×1024 window
 ./scripts/dev-session.sh --orientation landscape   # 1024×600 window
-./scripts/dev-session.sh --density readable        # larger density profile
+./scripts/dev-session.sh --density compact         # another density profile
 ./scripts/dev-session.sh --reset-home              # fresh sample documents
 ```
 
@@ -45,6 +59,10 @@ closes programs the normal way first) to leave. Logs:
 `xserver.log`).
 
 Useful options: `--headless` (Xvfb, no window), `--release`, `--no-build`.
+
+`setup-debian.sh` also installs `fonts-wine` and registers its Tahoma clone
+with fontconfig (the shell's and the programs' font); rerun it (or
+`./scripts/container.sh build`) after updating from POC 0.2.
 
 ## Run it on another OS (e.g. macOS)
 
@@ -80,16 +98,23 @@ the PDF in Atril, fills a form in Firefox, takes Firefox to full screen with
 F11 and back with the shell's escape button, reopens both documents from
 Today, opens context menus near the screen edges, and ends the session with
 unsaved work (which must be asked about, not discarded). Saved files are
-checked on disk. Screenshots land in `screenshots/workflow/`.
+checked on disk. Screenshots land in `screenshots/workflow/`. In landscape
+the web form is below the fold at device scale; the test scrolls it into
+view with the mouse wheel, standing in for a stylus scroll.
+
+`./scripts/capture-screens.sh` captures the shell screens (Today, Start,
+Programs, Settings, About, Screen, Find, keyboard) in both orientations into
+`screenshots/pocketpc/`.
 
 `./scripts/make-sample-files.py` regenerates the sample documents.
 
 ## Configuration
 
 `config/pda-shell.toml`: every size, colour and input threshold (long-press
-600 ms, 8 px slop, …), density profiles (`[density.compact|balanced|readable]`),
-Today shortcuts, keyboard command and layout, Start menu filtering, full-screen
-policy and dialog fitting. Session-local edits of Today shortcuts are saved to
+600 ms, 8 px slop, …), density profiles
+(`[density.compact|balanced|readable|pocketpc]`, `pocketpc` selected),
+the programs' DPI and font (`app_dpi`, `app_font`), favorites, keyboard command and layout, Start menu filtering, full-screen
+policy and dialog fitting. Session-local edits of the favorites are saved to
 `$XDG_CONFIG_HOME/pda-shell/today-shortcuts`.
 `config/openbox/rc.xml`: window-manager rules (maximize and undecorate
 ordinary application windows). `config/home/`: defaults copied into a new
@@ -103,15 +128,18 @@ Debian 13 (see the script).
 src/
   main.rs, lib.rs, config.rs
   shell/      state machine (state.rs), layout.rs, shortcuts.rs, controller (mod.rs)
-  ui/         status_bar/, command_bar/, today/, start_menu/, escape.rs, shared widgets + CSS
+  ui/         status_bar/, command_bar/, today/, start_menu/, programs.rs, settings/,
+              escape.rs, shared widgets + CSS
   apps/       desktop entries, search, launching
   input/      gesture recognizer (gesture.rs) + GTK long-press feedback
   keyboard/   Onboard control
-  platform/   neutral window types; x11/ = all X11/EWMH code
+  platform/   neutral window types; x11/ = all X11/EWMH code, XSETTINGS (settings.rs)
 scripts/      setup-debian.sh, dev-session.sh, smoke-test.sh, app-workflow-test.sh,
-              container.sh, make-sample-files.py, bin/pda-onboard, lib/pda_ui.py
+              capture-screens.sh, capture-profiles.sh, container.sh,
+              make-sample-files.py, bin/pda-onboard, lib/pda_ui.py
 config/       pda-shell.toml, openbox/rc.xml, home/ (session HOME defaults)
-assets/       sample-files/ (documents copied into the session HOME)
+assets/       icons/ (the shell's original icon set), sample-files/ (documents copied
+              into the session HOME)
 docs/         architecture, hardware, UX principles, ergonomics, test results,
               screenshots, known limitations
 tests/        usability_flow.rs
@@ -121,12 +149,12 @@ screenshots/  captured from the running implementation
 ## Screenshots
 
 All captured from the running implementation (Xvfb, Openbox, real
-programs) while the workflow test drove it with taps; index and density
-comparisons in [docs/screenshots.md](docs/screenshots.md).
+programs) while the tests drove it with taps; index and POC 0.2 → 0.3
+before/after comparison in [docs/screenshots.md](docs/screenshots.md).
 
 | | |
 |---|---|
-| ![](screenshots/apps/portrait-05-gnumeric-keyboard.png) | ![](screenshots/apps/portrait-12-today-with-apps.png) |
+| ![](screenshots/pocketpc/portrait-05-gnumeric-keyboard.png) | ![](screenshots/pocketpc/portrait-12-today-with-apps.png) |
 | Gnumeric, portrait, edited with the on-screen keyboard | Today with five programs open |
-| ![](screenshots/apps/landscape-07-mousepad-keyboard.png) | ![](screenshots/apps/landscape-11-fullscreen-escape.png) |
-| Mousepad, landscape, keyboard open | Firefox full screen with the shell's "Exit full screen" |
+| ![](screenshots/pocketpc/shell-landscape-01-today.png) | ![](screenshots/pocketpc/landscape-07-mousepad-keyboard.png) |
+| Today, landscape | Mousepad, landscape, keyboard open |

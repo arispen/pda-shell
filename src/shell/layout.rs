@@ -86,10 +86,13 @@ pub struct Layout {
     pub bottom_bar: Rect,
     /// Space left for applications (and the Today screen) between the bars.
     pub workarea: Rect,
+    /// The largest the Start drop-down may be; it is as tall as its content.
     pub start_menu: Rect,
-    /// Columns of application shortcuts on Today.
+    /// Columns of favorites on Today.
     pub today_columns: u32,
-    /// Today puts recent documents beside the shortcuts instead of below.
+    /// Columns of the Programs and Settings icon grids.
+    pub grid_columns: u32,
+    /// Today shows its items in two columns instead of one.
     pub today_side_by_side: bool,
 }
 
@@ -105,21 +108,19 @@ impl Layout {
         let bottom_bar = Rect::new(0, (height - bottom) as i32, width, bottom);
         let workarea = Rect::new(0, top as i32, width, work_h);
 
-        // Pocket PC style: the Start menu drops down from the top-left corner.
-        // In portrait it uses the full width; in landscape a fixed column so
-        // the running application stays visible beside it.
-        let menu_w = match orientation {
-            Orientation::Portrait => width,
-            Orientation::Landscape => d.start_menu_width_px.clamp(200, width),
-        };
+        // Pocket PC style: the Start menu drops down from the top-left
+        // corner, under the Start button, in both orientations; the program
+        // behind it stays visible.
+        let menu_w = d.start_menu_width_px.clamp(200, width);
         let start_menu = Rect::new(0, top as i32, menu_w, work_h);
 
-        // A shortcut cell is roughly icon + label: about ten characters of
-        // label per line, and never under ~90 px.
-        let cell = (d.today_icon_px + d.font_px * 5).max(90);
+        // An icon cell is the icon plus a label of about eight characters
+        // per line, never under ~90 px.
+        let cell = (d.today_icon_px + d.font_px * 4).max(90);
         let today_side_by_side = orientation == Orientation::Landscape;
-        let shortcut_area = if today_side_by_side { width / 2 } else { width };
-        let today_columns = (shortcut_area / cell).clamp(2, 8);
+        let favorites_area = if today_side_by_side { width / 2 } else { width };
+        let today_columns = (favorites_area / cell).clamp(2, 8);
+        let grid_columns = (width / cell).clamp(3, 8);
 
         Self {
             orientation,
@@ -129,6 +130,7 @@ impl Layout {
             workarea,
             start_menu,
             today_columns,
+            grid_columns,
             today_side_by_side,
         }
     }
@@ -166,19 +168,25 @@ mod tests {
     }
 
     #[test]
-    fn portrait_start_menu_is_full_width() {
-        let l = Layout::compute(600, 1024, &design());
-        assert_eq!(l.start_menu.width, 600);
-        assert_eq!(l.start_menu.y, l.workarea.y);
-        assert_eq!(l.start_menu.height, l.workarea.height);
-        assert!(!l.today_side_by_side);
+    fn start_menu_drops_down_under_the_start_button() {
+        for (w, h) in [(600, 1024), (1024, 600)] {
+            let l = Layout::compute(w, h, &design());
+            assert_eq!((l.start_menu.x, l.start_menu.y), (0, l.workarea.y), "{w}x{h}");
+            assert_eq!(l.start_menu.width, design().start_menu_width_px, "not full width");
+            assert_eq!(l.start_menu.height, l.workarea.height, "at most the work area");
+        }
+        assert!(!Layout::compute(600, 1024, &design()).today_side_by_side);
+        assert!(Layout::compute(1024, 600, &design()).today_side_by_side);
     }
 
     #[test]
-    fn landscape_start_menu_is_a_column() {
-        let l = Layout::compute(1024, 600, &design());
-        assert_eq!(l.start_menu.width, design().start_menu_width_px);
-        assert!(l.today_side_by_side);
+    fn pocketpc_grids_are_four_columns_in_portrait() {
+        let mut d = design();
+        d.font_px = 22;
+        d.today_icon_px = 44;
+        let p = Layout::compute(600, 1024, &d);
+        assert_eq!(p.grid_columns, 4, "like the Pocket PC Programs folder");
+        assert!(Layout::compute(1024, 600, &d).grid_columns > p.grid_columns);
     }
 
     #[test]
@@ -193,8 +201,8 @@ mod tests {
     fn larger_text_gives_fewer_shortcut_columns() {
         let mut d = design();
         let compact = Layout::compute(600, 1024, &d).today_columns;
-        d.font_px = 16;
-        d.today_icon_px = 32;
+        d.font_px = 22;
+        d.today_icon_px = 44;
         let readable = Layout::compute(600, 1024, &d).today_columns;
         assert!(readable < compact, "{readable} < {compact}");
     }

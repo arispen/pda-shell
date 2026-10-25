@@ -1,3 +1,53 @@
+# POC 0.3 test results
+
+Date: 2026-10-24. Same environment as POC 0.2 below (Debian 13 arm64 dev
+container, Xvfb at 600×1024 / 1024×600, Openbox, GTK 4.18), plus
+`fonts-wine` (Tahoma) and the Firefox preference file. Profile: `pocketpc`
+(the new default).
+
+| Test | Command | Result |
+|---|---|---|
+| Unit and integration tests | `cargo test` | 97 + 1 passed |
+| Shell smoke test, both orientations | `./scripts/smoke-test.sh` | 66 passed, 0 failed (one earlier run failed 2 checks on a Start-menu tap during the drop-down's first layout; a settle wait was added, then 2 clean runs) |
+| Workflow test (POC 0.2 pointer-only flow), both orientations | `./scripts/app-workflow-test.sh --screenshots screenshots/pocketpc` | 130 passed, 0 failed |
+| Shell screen captures | `./scripts/capture-screens.sh` | `screenshots/pocketpc/shell-*` |
+
+No regression in the #2 pointer-only workflow: open/edit/save/reopen
+documents, switch programs, dismiss the keyboard, unsaved edits are asked
+about, End session exits cleanly with nothing left behind.
+
+Changes the tests needed, all from the new UI rather than lowered checks:
+bar sizes are read from the work area instead of assumed 24/26 px; Close
+and End session are found by name (Close moved next to Windows, End session
+is a Start-menu row); the smoke test now uses a fresh HOME (a stale Mousepad
+"restore session" dialog in the shared one broke it); context-menu edge
+presses go a fifth into the element (GTK 4 AT-SPI positions ignore CSS
+padding); in landscape the web form is below the fold and is scrolled into
+view with the wheel.
+
+Found and fixed while testing:
+
+- Firefox at 150 % text needed 760 px in portrait → exception
+  `ui.textScaleFactor = 115` ([ergonomics.md](ergonomics.md)).
+- Gnumeric at 144 dpi needs 294 px height; landscape with the keyboard left
+  292 px → landscape keyboard 40 % instead of 42 % of the work area.
+- The Start drop-down did not fit landscape (End session scrolled away) → it
+  drops the favorites rows when it would not fit.
+- Landscape Today wasted a third of the width on a separator → fixed.
+
+Reported, not fixed: Gnumeric's Save As is 876 px wide at 144 dpi (was
+665 px); in portrait 278 px of it are off the left edge. See
+[known-limitations.md](known-limitations.md#what-scaling-made-worse-reported-not-silently-accepted).
+
+Seen once, pre-existing: Openbox failed to open the display at session
+start (`dev-session.sh` does not check that Openbox is alive after its
+wait); the run's checks all failed and the next run passed.
+
+**Not done: assessment on the physical 5" panel.** All of the above ran in
+Xvfb. Text sizes, target sizes and the 1.5× program text are computed in
+millimetres, not judged by a person with a stylus. Physical usability
+findings: none yet; record them here when the panel is available.
+
 # POC 0.2 test results and recommendation
 
 Date: 2026-10-22. Environment: Debian 13 (trixie) arm64 dev container on an

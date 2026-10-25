@@ -25,15 +25,18 @@ pub struct StatusBar {
 impl StatusBar {
     pub fn new(app: &gtk::Application, layout: &Layout, x11: &Rc<X11>, cfg: &Config, dispatch: Dispatch) -> Rc<Self> {
         let win = ShellWindow::new(app, "pda-shell status bar", "bar", SurfaceRole::TopPanel, layout.top_bar, x11, cfg);
+        win.window.add_css_class("top-bar");
         let row = gtk::Box::new(gtk::Orientation::Horizontal, cfg.design.spacing_px as i32);
 
         let start = gtk::Button::new();
         start.add_css_class("start");
         let start_content = gtk::Box::new(gtk::Orientation::Horizontal, 3);
-        start_content.append(&super::icon_image(None, "view-app-grid-symbolic", cfg.design.icon_px));
+        let start_icon = (cfg.design.top_bar_px * 2 / 3).max(cfg.design.icon_px);
+        start_content.append(&super::named_icon("pda-start", start_icon));
         start_content.append(&gtk::Label::new(Some("Start")));
         start.set_child(Some(&start_content));
         start.set_tooltip_text(Some("Start menu"));
+        start.update_property(&[gtk::accessible::Property::Label("Start")]);
         let d = dispatch.clone();
         start.connect_clicked(move |_| d(Command::StartButton));
 

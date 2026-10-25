@@ -86,6 +86,11 @@ pub fn is_technical(entry: &AppEntry, hidden: &[String]) -> bool {
         || entry.categories.iter().any(|c| SETTINGS_CATEGORIES.contains(&c.as_str()))
 }
 
+/// Whether an entry is a settings dialog of the desktop environment.
+pub fn is_settings(entry: &AppEntry) -> bool {
+    entry.categories.iter().any(|c| SETTINGS_CATEGORIES.contains(&c.as_str()))
+}
+
 /// Entries matching `query`, best first; ties sorted by name.
 pub fn search<'a>(apps: &'a [AppEntry], query: &str) -> Vec<&'a AppEntry> {
     let mut hits: Vec<(u32, &AppEntry)> =
@@ -269,6 +274,8 @@ mod tests {
         assert!(is_technical(&app("openbox.desktop", "Openbox", "", &[], &[]), &hidden));
         let prefs = app("thunar-settings.desktop", "File Manager Preferences", "", &[], &["XFCE", "Settings"]);
         assert!(is_technical(&prefs, &hidden), "settings dialogs are technical");
+        assert!(is_settings(&prefs));
+        assert!(!is_settings(&c[0]));
     }
 
     #[test]

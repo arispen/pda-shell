@@ -270,7 +270,18 @@ run_orientation() {
     ui tap thunar "table cell" "^index.html$" --timeout 5 >/dev/null
     check "tapping index.html opens Firefox" wait_n 400 active_title_matches "^Field station"
     check "Firefox fills the work area" wait_for fills_workarea firefox-esr
-    ui wait firefox entry "^Observer$" --timeout 20 >/dev/null
+    ui wait firefox heading "^Field station$" --timeout 20 >/dev/null
+    # With program text at device scale the form is below the fold in
+    # landscape (and an off-screen field is not found at all). Scroll it into
+    # view with the wheel: a stand-in for a stylus scroll, which needs
+    # system-wide stylus input (Milestone 4).
+    local fx fy fw fh n=0
+    read -r fx fy fw fh <<< "$(ui find firefox entry '^Observer$')"
+    while { [ -z "$fy" ] || [ $((fy + fh)) -gt $((H - BOTTOM)) ]; } && [ "$n" -lt 15 ]; do
+        xdotool mousemove $((W / 2)) $((H / 2)) click 5; sleep 0.3; n=$((n + 1))
+        read -r fx fy fw fh <<< "$(ui find firefox entry '^Observer$')"
+    done
+    [ "$n" -gt 0 ] && note "scrolled the page $n wheel steps to reach the form"
     ui tap firefox entry "^Observer$" >/dev/null
     bar "keyboard"
     wait_for found onboard frame "^Onboard$"; sleep 1
@@ -320,8 +331,11 @@ run_orientation() {
     for target in "list item:^notes.txt$" "button:^Xfce Terminal$" "button:^Thunar"; do
         pos="$(ui find pda-shell "${target%%:*}" "${target#*:}" --frame "^Today$")" || { fail "find $target"; continue; }
         read -r x y w h <<< "$pos"
-        # Press near the element's outer edge (left / right side).
-        case "$target" in *Terminal*) x=$((x + w - 6)) ;; *) x=$((x + 6)) ;; esac
+        # Press near the element's outer edge (left / right side). A fifth
+        # of the way in: GTK 4 reports AT-SPI positions without the CSS
+        # padding of enclosing boxes (~16 px on Today), so "6 px inside" can
+        # miss the element.
+        case "$target" in *Terminal*) x=$((x + w - w / 5)) ;; *) x=$((x + w / 5)) ;; esac
         ui long-press "$x" $((y + h / 2)) 900
         check "long press near ($x,$((y + h / 2))) opens a context menu" wait_for has_popup
         check "context menu stays on screen" popup_on_screen
@@ -339,7 +353,7 @@ run_orientation() {
     check "Mousepad has unsaved changes" wait_for active_title_matches '^\*'
     ui tap pda-shell button "^Start$" --frame "status bar" >/dev/null
     sleep 0.5
-    ui tap pda-shell button "^End session$" --frame "^Start$" >/dev/null
+    ui tap pda-shell "list item" "^End session$" --frame "^Start$" >/dev/null
     check "Mousepad asks before discarding unsaved changes" wait_n 100 found mousepad button "^Don't Save$"
     check "session is still running while the question is open" kill -0 "$session"
     shot 15-end-session-unsaved

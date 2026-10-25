@@ -1,6 +1,7 @@
 # Known limitations and status
 
-Last updated: 2026-10-22 (POC 0.2: Milestones 3, 5, 6, 7). Nothing here has
+Last updated: 2026-10-24 (POC 0.3: Pocket PC 2003 SE UX, P0 slice of
+issue #4; POC 0.2 sections below unchanged unless noted). Nothing here has
 been tried on the physical 5" resistive display yet; everything ran in the
 nested X11 session (Xvfb + Openbox, Debian 13 arm64 in the dev container).
 
@@ -18,6 +19,75 @@ Status words used below:
 There was no human at a physical screen. The "manual pointer-only test" of
 the issue was replayed by the workflow test with synthetic pointer taps; see
 [test-results.md](test-results.md).
+
+## POC 0.3 status (issue #4)
+
+| Area | Item | Status |
+|---|---|---|
+| P0 scaling | `pocketpc` profile (22 px text, 46 px targets, 48/50 px bars), shipped default | **automated** (smoke and workflow tests run with it), **unit-tested** (token ranges) |
+| P0 scaling | Programs scaled session-wide: XSETTINGS `Xft/DPI` 144 and `Gtk/FontName` Tahoma 10, `Xft.dpi` resource | **demonstrated** (screenshots), **unit-tested** (XSETTINGS encoding) |
+| P0 scaling | Firefox exception `ui.textScaleFactor = 115` so it fits 600 px | **automated** (fills the work area in portrait) |
+| P0 Today | Date, Calendar / Tasks / Messages empty states, Documents, Open programs, Favorites; system info moved to Settings → About | **automated** (documents, open programs, favorites), **demonstrated** (layout) |
+| P0 Start | Drop-down with recent strip, Today, favorites, Programs, Settings, Find, End session | **automated** (launch by typing, Programs, Settings, End session) |
+| P0 Programs / Settings | Icon grids, Linux tools, About, Screen, Network, Linux settings, OK navigation | **automated** (Settings → About → OK, Programs → Linux tools), **unit-tested** (page navigation) |
+| P0 theme | Blue status bar, silver menu bar, Tahoma, original icons | **demonstrated** |
+| P0 screenshots | Before/after at 600×1024 and 1024×600 | done: [screenshots.md](screenshots.md) |
+| P0 | Assessment on the physical 5" panel | **not done** (no hardware; see below) |
+| P1 | Program-specific commands in the command bar (API for native apps, fallback for X11 windows) | **not started**; the bar keeps Today / Windows / Close / OK / input panel |
+| P2 | Native Files and Notes, integrated input panel (SIP) | **not started**; Thunar, Mousepad and Onboard remain |
+
+### What scaling made worse (reported, not silently accepted)
+
+Programs' text is 1.5× larger, so dialogs laid out around text grow:
+
+- **Gnumeric Save As now needs at least 876×428 px** (POC 0.2: 665×427).
+  In portrait (600 px wide) it is aligned to keep Save and Cancel visible,
+  as before, but now **278 px** of its left side are off screen (POC 0.2:
+  67 px): the "Name" label, the places sidebar and the start of the name
+  field. Saving with the current name works; typing a new name in portrait
+  is not practical. In landscape it fits the width; with the keyboard shown
+  (1024×302 work area) it is aligned to its bottom edge and the name field
+  is under the status bar, as in POC 0.2.
+- **Mousepad "Save Changes"** is 602 px wide: 2 px wider than portrait; it is
+  shifted 2 px left, both buttons visible.
+- **Landscape with the keyboard** leaves 1024×302 px (POC 0.2: 1024×319 with
+  the compact bars). The landscape keyboard was reduced from 42 % to 40 % of
+  the work area (200 px, four rows of 50 px keys) so Gnumeric (minimum
+  height 294 px at 144 dpi) still fits above it.
+- **Firefox** at the session's 150 % needed 760 px; the 115 % exception
+  above fixes the portrait fit at the cost of smaller text than other
+  programs.
+
+Possible next steps: a per-program DPI (GTK 3 honours `GDK_DPI_SCALE`, but
+programs opened from Thunar inherit Thunar's environment, not the shell's),
+or the native Files frontend (P2) so desktop file choosers are needed less.
+
+### Physical panel
+
+Nothing in POC 0.3 was judged on the 5" resistive panel. The sizes in mm
+are computed (Settings → System → Screen shows them live); readability,
+stylus accuracy with 46 px targets and the 1.5× program text must be
+checked on the device before the tokens are final. Record findings in
+[test-results.md](test-results.md).
+
+### Smaller POC 0.3 limitations
+
+- The Start menu leaves out the favorites rows (they stay in its recent
+  strip) when the full menu would not fit, e.g. landscape (502 px work
+  area) or with the keyboard shown, so End session never scrolls out of
+  sight.
+- Calendar, Tasks and Messages have no providers; they show what is
+  missing, not sample data.
+- Toolbar icons inside programs keep their 16/24 px size; only text scales.
+- GTK 4 reports AT-SPI positions without the CSS padding of enclosing
+  boxes (about 16 px on Today items); the workflow test presses a fifth of
+  the way into an element instead of 6 px from its edge.
+- `setup-debian.sh` must be rerun (or the container image rebuilt) after
+  updating: it now installs `fonts-wine` (Tahoma) and the Firefox
+  preference file.
+- The shell takes over the XSETTINGS selection; inside a full desktop
+  session (not the nested dev session) that would override the desktop's
+  settings daemon while the shell runs.
 
 ## Status by milestone
 
@@ -136,11 +206,12 @@ noted.
 
 ### Shell
 - Window icons in the switcher are matched from WM_CLASS heuristically.
-- Application installs are not watched; "Refresh" on Today re-reads them.
+- (POC 0.2) Application installs were not watched. Since POC 0.3 the shell
+  follows installs and removals (GIO app-info monitor); Refresh is gone.
 - No double-tap or drag behaviour is attached to shell widgets (GTK
   defaults; lists scroll with scrollbars).
-- The density profile changes the shell only; programs keep their own sizes
-  (see [ergonomics.md](ergonomics.md)).
+- (POC 0.2) The density profile changed the shell only. Since POC 0.3
+  programs are scaled through `app_dpi` (see [ergonomics.md](ergonomics.md)).
 
 ### Development environment
 - On non-Debian hosts the session runs in the Debian 13 container

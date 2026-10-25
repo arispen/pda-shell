@@ -34,7 +34,6 @@ pub enum Command {
     AddShortcut(String),
     RemoveShortcut(String),
     ForgetRecent(String),
-    Refresh,
 }
 
 pub type Dispatch = Rc<dyn Fn(Command)>;
@@ -51,6 +50,8 @@ pub struct Shell {
     state: RefCell<ShellState>,
     apps: RefCell<Vec<AppEntry>>,
     shortcuts: Rc<RefCell<Vec<String>>>,
+    /// Programs started in this session, most recent first (Start menu).
+    recent_apps: Rc<RefCell<Vec<String>>>,
     status: Rc<StatusBar>,
     command: Rc<CommandBar>,
     today: Rc<Today>,
@@ -58,6 +59,8 @@ pub struct Shell {
     escape: Rc<FullscreenEscape>,
     keyboard: RefCell<Keyboard>,
     menu_closed_at: Cell<Option<Instant>>,
+    /// Kept alive so installs and removals keep being reported.
+    app_monitor: RefCell<Option<gio::AppInfoMonitor>>,
     dispatch: Dispatch,
 }
 
@@ -80,6 +83,9 @@ impl Shell {
         );
 
         let x11 = Rc::new(X11::connect().map_err(|e| format!("X11: {e}"))?);
+        if let Err(e) = x11.publish_settings(cfg.design.app_dpi, &cfg.design.app_font) {
+            log::error!("cannot publish application settings: {e}");
+        }
         crate::ui::install_stylesheet(&cfg);
 
         let shortcuts = Rc::new(RefCell::new(shortcuts::load(&cfg.today.shortcuts)));
@@ -93,8 +99,10 @@ impl Shell {
 
         let status = StatusBar::new(app, &layout, &x11, &cfg, dispatch.clone());
         let command = CommandBar::new(app, &layout, &x11, &cfg, dispatch.clone());
-        let today = Today::new(app, &layout, &x11, &cfg, dispatch.clone());
-        let start = StartMenu::new(app, &layout, &x11, &cfg, dispatch.clone(), shortcuts.clone());
+        let today = Today::new(app, &layout, &x11, &cfg, dispatch.clone(), shortcuts.clone());
+        let recent_apps: Rc<RefCell<Vec<String>>> = Rc::default();
+        let start =
+            StartMenu::new(app, &layout, &x11, &cfg, dispatch.clone(), shortcuts.clone(), recent_apps.clone());
         let escape = FullscreenEscape::new(app, &layout, &x11, &cfg, dispatch.clone());
         let d = dispatch.clone();
         let on_keyboard_visible: Rc<dyn Fn(bool)> = Rc::new(move |v| d(Command::Shell(Event::KeyboardVisible(v))));
@@ -107,6 +115,7 @@ impl Shell {
             state: RefCell::new(ShellState::with_fullscreen_mode(cfg.windows.fullscreen)),
             apps: RefCell::new(Vec::new()),
             shortcuts,
+            recent_apps,
             status,
             command,
             today,
@@ -114,6 +123,7 @@ impl Shell {
             escape,
             keyboard,
             menu_closed_at: Cell::new(None),
+            app_monitor: RefCell::new(None),
             dispatch,
         });
         *weak.borrow_mut() = Rc::downgrade(&shell);
@@ -129,8 +139,16 @@ impl Shell {
         });
 
         shell.reload_apps();
+        // Programs installed or removed while the shell runs.
+        let w = Rc::downgrade(&shell);
+        let monitor = gio::AppInfoMonitor::get();
+        monitor.connect_changed(move |_| {
+            if let Some(shell) = w.upgrade() {
+                shell.reload_apps();
+            }
+        });
+        *shell.app_monitor.borrow_mut() = Some(monitor);
         shell.today.refresh_recent();
-        shell.today.refresh_info();
         shell.today.win.window.present();
         shell.status.win.window.present();
         shell.command.win.window.present();
@@ -167,6 +185,7 @@ impl Shell {
         let apps = apps::load_installed();
         log::info!("{} applications installed", apps.len());
         self.start.set_apps(apps.clone());
+        self.today.set_apps(&apps);
         *self.apps.borrow_mut() = apps;
         self.refresh_shortcuts();
     }
@@ -175,6 +194,7 @@ impl Shell {
         let apps = self.apps.borrow();
         let ids = self.shortcuts.borrow();
         self.today.set_shortcuts(&apps::resolve_shortcuts(&apps, &ids));
+        self.start.refresh();
     }
 
     pub fn dispatch(&self, cmd: Command) {
@@ -218,11 +238,6 @@ impl Shell {
                 }
                 self.today.forget(&uri);
             }
-            Command::Refresh => {
-                self.reload_apps();
-                self.today.refresh_recent();
-                self.today.refresh_info();
-            }
         }
     }
 
@@ -259,11 +274,11 @@ impl Shell {
                 self.menu_closed_at.set(Some(Instant::now()));
                 self.start.hide();
             }
-            Effect::Launch(id) => {
-                if let Err(e) = apps::launch(&id) {
-                    log::error!("cannot launch {id}: {e}");
-                }
-            }
+            Effect::Launch(id) => match apps::launch(&id) {
+                Ok(()) => shortcuts::add_recent(&mut self.recent_apps.borrow_mut(), &id),
+                Err(e) => log::error!("cannot launch {id}: {e}"),
+            },
+            Effect::ShowPage(page) => self.today.show_page(page),
             Effect::SetKeyboard(visible) => self.keyboard.borrow_mut().set_visible(visible),
             Effect::ReserveKeyboard(visible) => {
                 let extra = if visible { self.keyboard.borrow().rect().height } else { 0 };
@@ -271,7 +286,7 @@ impl Shell {
                 // the keyboard never covers their lower part (End session).
                 let shrink = |r: layout::Rect| layout::Rect { height: r.height.saturating_sub(extra), ..r };
                 self.today.win.set_rect(shrink(self.layout.workarea));
-                self.start.win.set_rect(shrink(self.layout.start_menu));
+                self.start.set_available(shrink(self.layout.start_menu));
                 if let Some(xid) = gtk_glue::xid(self.command.win.window.upcast_ref()) {
                     if let Err(e) = self.x11.reserve(xid, SurfaceRole::BottomPanel, self.layout.bottom_bar, extra) {
                         log::warn!("cannot reserve keyboard space: {e}");

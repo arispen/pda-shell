@@ -10,7 +10,7 @@ mkdir -p "$OUT"
 (cd "$REPO" && cargo build) || exit 1
 ui() { python3 "$REPO/scripts/lib/pda_ui.py" "$@" 2>/dev/null; }
 
-for density in compact balanced readable; do
+for density in compact balanced readable pocketpc; do
     for orient in portrait landscape; do
         home="$(mktemp -d)"; ready="$(mktemp)"; rm -f "$ready"
         "$REPO/scripts/dev-session.sh" --orientation "$orient" --density "$density" --headless --no-build \

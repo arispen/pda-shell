@@ -1,5 +1,5 @@
-//! System information shown on Today. Only real values; anything that
-//! cannot be read is left out.
+//! System information for Settings → About. Only real values; anything
+//! that cannot be read is left out.
 
 use std::path::Path;
 
@@ -25,23 +25,24 @@ pub fn memory_mib(meminfo: &str) -> Option<(u64, u64)> {
     Some((field("MemAvailable:")? / 1024, field("MemTotal:")? / 1024))
 }
 
-pub fn system_lines() -> Vec<String> {
+/// (label, value) pairs for the About screen.
+pub fn system_info() -> Vec<(&'static str, String)> {
     let read = |p: &str| std::fs::read_to_string(p).ok();
-    let mut lines = Vec::new();
-    let host = read("/proc/sys/kernel/hostname").map(|s| s.trim().to_string());
-    let os = read("/etc/os-release").as_deref().and_then(os_name);
-    let kernel = read("/proc/sys/kernel/osrelease").map(|s| s.trim().to_string());
-    let first: Vec<String> = [host, os].into_iter().flatten().collect();
-    if !first.is_empty() {
-        lines.push(first.join(" · "));
+    let mut rows = Vec::new();
+    if let Some(host) = read("/proc/sys/kernel/hostname") {
+        rows.push(("Device name", host.trim().to_string()));
     }
-    if let Some(k) = kernel {
-        lines.push(format!("Linux {k} ({})", std::env::consts::ARCH));
+    if let Some(os) = read("/etc/os-release").as_deref().and_then(os_name) {
+        rows.push(("Operating system", os));
+    }
+    if let Some(k) = read("/proc/sys/kernel/osrelease") {
+        rows.push(("Kernel", format!("Linux {} ({})", k.trim(), std::env::consts::ARCH)));
     }
     if let Some((avail, total)) = read("/proc/meminfo").as_deref().and_then(memory_mib) {
-        lines.push(format!("Memory {avail} MB free of {total} MB"));
+        rows.push(("Memory", format!("{avail} MB free of {total} MB")));
     }
-    lines
+    rows.push(("Shell", format!("pda-shell {}", env!("CARGO_PKG_VERSION"))));
+    rows
 }
 
 /// Replace the home directory prefix with "~".

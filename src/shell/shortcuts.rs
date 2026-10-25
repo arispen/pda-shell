@@ -53,6 +53,16 @@ pub fn remove(ids: &mut Vec<String>, id: &str) {
     ids.retain(|i| i != id);
 }
 
+/// How many recently started programs the Start menu shows.
+pub const RECENT_APPS: usize = 6;
+
+/// Move `id` to the front of the recently started programs.
+pub fn add_recent(ids: &mut Vec<String>, id: &str) {
+    ids.retain(|i| i != id);
+    ids.insert(0, id.to_string());
+    ids.truncate(RECENT_APPS);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +86,15 @@ mod tests {
         assert_eq!(ids, vec!["a", "b"]);
         remove(&mut ids, "a");
         assert_eq!(ids, vec!["b"]);
+    }
+
+    #[test]
+    fn recent_programs_are_most_recent_first_and_bounded() {
+        let mut ids = Vec::new();
+        for i in 0..8 {
+            add_recent(&mut ids, &i.to_string());
+        }
+        add_recent(&mut ids, "5");
+        assert_eq!(ids, vec!["5", "7", "6", "4", "3", "2"]);
     }
 }

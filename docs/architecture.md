@@ -30,8 +30,8 @@ for things through standard EWMH messages.
 | `input` (mod) | Feeds the recognizer from GTK, draws long-press progress | yes | no |
 | `keyboard` | Onboard process, GSettings placement, D-Bus show/hide | GIO | no |
 | `platform` | Neutral types (`WindowId`, `AppWindow`, `WindowSnapshot`, `SurfaceRole`) and the `WindowSystem` trait | no | no |
-| `platform::x11` | EWMH via `x11rb`: roles, struts, activation, window watcher | `gtk_glue.rs` only | yes |
-| `ui::*` | Status bar, command bar, Today, Start menu widgets | yes | no |
+| `platform::x11` | EWMH via `x11rb`: roles, struts, activation, window watcher; XSETTINGS manager and `Xft.dpi` for programs (`settings.rs`) | `gtk_glue.rs` only | yes |
+| `ui::*` | Status bar, command bar, Today, Start menu, Programs and Settings screens (hosted in a stack on the Today desktop window), shell icons | yes | no |
 
 All X11 code is below `src/platform/x11/`. The single GTK↔X11 contact point
 is `gtk_glue::xid()`, which returns the X window ID of a realized GTK window.
@@ -41,7 +41,9 @@ is `gtk_glue::xid()`, which returns the X window ID of a realized GTK window.
 1. A widget or the window watcher produces a `Command` (UI-level) or an
    `Event` (state-machine level).
 2. `Shell::dispatch` feeds events to `ShellState::handle`, which returns
-   `Effect`s such as `Activate(id)`, `ShowDesktop(true)`, `Launch(id)`.
+   `Effect`s such as `Activate(id)`, `ShowDesktop(true)`, `Launch(id)`,
+   `ShowPage(page)` (Today, Programs, Settings, About, …; `Event::Back` is
+   the command bar's OK).
 3. `Shell::run` executes each effect against `X11`, `apps` or `Keyboard`.
 4. The window manager reacts; the watcher thread sees property changes and
    sends a new `WindowSnapshot`, which comes back as `Event::Windows`.

@@ -1,22 +1,30 @@
-//! Today screen: the date first, then what the user is working on (recent
-//! documents, open programs), then program shortcuts and a little real
-//! system information. It is the desktop surface below all application
-//! windows.
+//! Today: the date first, then glanceable items in the Pocket PC 2003
+//! order: Calendar, Tasks, Messages, then the documents and programs the
+//! user is working on and their favorite programs. Each item is a row with a
+//! large icon at the left, separated by thin lines.
+//!
+//! Calendar, Tasks and Messages have no data source yet; they say so instead
+//! of showing invented entries. System details are in Settings → About.
+//!
+//! The Today window is the desktop surface below all application windows,
+//! so it also hosts the other shell screens (Programs, Settings) in a stack.
 
-pub mod info;
 pub mod recent;
 
 use super::command_bar::{switcher_row, SwitcherEntry};
+use super::programs::Programs;
+use super::settings::{info, Settings};
 use super::{MenuItem, ShellWindow};
 use crate::apps::{self, AppEntry};
 use crate::config::Config;
 use crate::platform::x11::X11;
 use crate::platform::SurfaceRole;
 use crate::shell::layout::Layout;
-use crate::shell::state::Event;
+use crate::shell::state::{Event, Page};
 use crate::shell::{Command, Dispatch};
 use gtk::gio;
 use gtk::prelude::*;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 pub struct Today {
@@ -24,68 +32,100 @@ pub struct Today {
     cfg: Config,
     layout: Layout,
     dispatch: Dispatch,
+    stack: gtk::Stack,
+    programs: Programs,
+    settings: Settings,
     date: gtk::Label,
-    time: gtk::Label,
     summary: gtk::Label,
-    shortcuts: gtk::Grid,
+    shortcuts: gtk::Box,
     recent: gtk::ListBox,
-    running_col: gtk::Box,
+    running_item: gtk::Box,
     running: gtk::ListBox,
     running_count: std::cell::Cell<usize>,
     /// Documents removed from the list in this session.
     forgotten: std::cell::RefCell<std::collections::HashSet<std::path::PathBuf>>,
-    info: gtk::Label,
 }
 
-fn section(title: &str) -> gtk::Label {
-    let l = gtk::Label::new(Some(title));
-    l.add_css_class("section-title");
+/// A Today item: large icon at the left, bold title, then `content`.
+fn item(cfg: &Config, icon: &str, title: &str, content: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, cfg.design.padding_px as i32 * 2);
+    row.add_css_class("today-item");
+    let image = super::named_icon(icon, cfg.design.today_icon_px);
+    image.set_valign(gtk::Align::Start);
+    row.append(&image);
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    col.set_hexpand(true);
+    col.set_valign(gtk::Align::Center);
+    let t = gtk::Label::new(Some(title));
+    t.add_css_class("item-title");
+    t.set_xalign(0.0);
+    col.append(&t);
+    col.append(content);
+    row.append(&col);
+    row
+}
+
+/// Dim one-line text inside an item.
+fn line(text: &str) -> gtk::Label {
+    let l = gtk::Label::new(Some(text));
+    l.add_css_class("dim");
     l.set_xalign(0.0);
+    l.set_wrap(true);
     l
 }
 
-impl Today {
-    pub fn new(app: &gtk::Application, layout: &Layout, x11: &Rc<X11>, cfg: &Config, dispatch: Dispatch) -> Rc<Self> {
-        let win = ShellWindow::new(app, "Today", "today", SurfaceRole::Desktop, layout.workarea, x11, cfg);
-        let pad = cfg.design.padding_px as i32;
+fn list() -> gtk::ListBox {
+    let l = gtk::ListBox::new();
+    l.add_css_class("compact");
+    l.add_css_class("targets");
+    l.set_selection_mode(gtk::SelectionMode::None);
+    l.set_activate_on_single_click(true);
+    l
+}
 
-        let header = gtk::Box::new(gtk::Orientation::Horizontal, pad);
+/// Icon for a document: one of the shell's document icons by content type.
+fn document_icon(content_type: &str) -> &'static str {
+    let t = content_type.to_lowercase();
+    if t.contains("spreadsheet") || t.contains("excel") || t.contains("csv") {
+        "pda-doc-spreadsheet"
+    } else if t.contains("pdf") {
+        "pda-doc-pdf"
+    } else if t.contains("html") {
+        "pda-doc-web"
+    } else if t.starts_with("text/") || t.contains("document") || t.contains("word") {
+        "pda-doc-text"
+    } else {
+        "pda-doc"
+    }
+}
+
+impl Today {
+    pub fn new(
+        app: &gtk::Application,
+        layout: &Layout,
+        x11: &Rc<X11>,
+        cfg: &Config,
+        dispatch: Dispatch,
+        favorites: Rc<RefCell<Vec<String>>>,
+    ) -> Rc<Self> {
+        let win = ShellWindow::new(app, "Today", "today", SurfaceRole::Desktop, layout.workarea, x11, cfg);
+
+        let header = gtk::Box::new(gtk::Orientation::Vertical, 0);
         header.add_css_class("today-header");
-        let heading = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        heading.set_hexpand(true);
         let date = gtk::Label::new(None);
         date.add_css_class("date");
         date.set_xalign(0.0);
         let summary = gtk::Label::new(None);
         summary.add_css_class("summary");
         summary.set_xalign(0.0);
-        heading.append(&date);
-        heading.append(&summary);
-        let time = gtk::Label::new(None);
-        time.add_css_class("time");
-        time.set_valign(gtk::Align::Start);
-        header.append(&heading);
-        header.append(&time);
+        header.append(&date);
+        header.append(&summary);
 
-        let shortcuts = gtk::Grid::new();
-        shortcuts.set_column_homogeneous(true);
-        shortcuts.set_row_spacing(cfg.design.spacing_px);
-        shortcuts.set_column_spacing(cfg.design.spacing_px);
-        shortcuts.set_margin_start(pad);
-        shortcuts.set_margin_end(pad);
-        shortcuts.set_margin_top(pad);
-
-        let recent = gtk::ListBox::new();
-        recent.add_css_class("compact");
-        recent.set_selection_mode(gtk::SelectionMode::None);
-        recent.set_activate_on_single_click(true);
+        let recent = list();
         let d = dispatch.clone();
         recent.connect_row_activated(move |_, row| d(Command::OpenUri(row.widget_name().to_string())));
 
-        let running = gtk::ListBox::new();
-        running.add_css_class("compact");
-        running.set_selection_mode(gtk::SelectionMode::None);
-        running.set_activate_on_single_click(true);
+        let running = list();
         let d = dispatch.clone();
         running.connect_row_activated(move |_, row| {
             if let Some(id) = row.widget_name().strip_prefix("win-").and_then(|s| s.parse().ok()) {
@@ -93,49 +133,36 @@ impl Today {
             }
         });
 
-        let info = gtk::Label::new(None);
-        info.add_css_class("dim");
-        info.set_xalign(0.0);
-        info.set_wrap(true);
-        info.set_margin_start(pad);
-        info.set_margin_end(pad);
-        info.set_margin_top(pad);
-        info.set_selectable(false);
+        let shortcuts = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-        let programs_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        programs_col.append(&section("Programs"));
-        programs_col.append(&shortcuts);
-        let recent_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        recent_col.append(&section("Recent documents"));
-        recent_col.append(&recent);
-        let running_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        running_col.append(&section("Open programs"));
-        running_col.append(&running);
-        running_col.set_visible(false);
-        let info_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        info_col.append(&section("System"));
-        info_col.append(&info);
+        let calendar = item(cfg, "pda-calendar", "Calendar", &line("No calendar connected"));
+        let tasks = item(cfg, "pda-tasks", "Tasks", &line("No task list connected"));
+        let messages = item(cfg, "pda-messages", "Messages", &line("No mail account set up"));
+        let documents = item(cfg, "pda-documents", "Documents", &recent);
+        let running_item = item(cfg, "pda-windows", "Open programs", &running);
+        running_item.set_visible(false);
+        let favorites_item = item(cfg, "pda-favorites", "Favorites", &shortcuts);
 
-        // What the user is working on comes first: documents and open
-        // programs, then shortcuts, then system details.
         let body = if layout.today_side_by_side {
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, pad);
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             row.set_homogeneous(true);
-            let left = gtk::Box::new(gtk::Orientation::Vertical, pad);
-            left.append(&recent_col);
-            left.append(&running_col);
-            let right = gtk::Box::new(gtk::Orientation::Vertical, pad);
-            right.append(&programs_col);
-            right.append(&info_col);
+            let left = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            left.append(&calendar);
+            left.append(&tasks);
+            left.append(&messages);
+            left.append(&favorites_item);
+            let right = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            right.add_css_class("today-column");
+            right.append(&documents);
+            right.append(&running_item);
             row.append(&left);
             row.append(&right);
             row
         } else {
-            let col = gtk::Box::new(gtk::Orientation::Vertical, pad);
-            col.append(&recent_col);
-            col.append(&running_col);
-            col.append(&programs_col);
-            col.append(&info_col);
+            let col = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            for w in [&calendar, &tasks, &messages, &documents, &running_item, &favorites_item] {
+                col.append(w);
+            }
             col
         };
         let scroller = gtk::ScrolledWindow::builder()
@@ -143,26 +170,46 @@ impl Today {
             .vexpand(true)
             .child(&body)
             .build();
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        page.append(&header);
-        page.append(&scroller);
-        win.set_content(&page);
+        let today_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        today_page.append(&header);
+        today_page.append(&scroller);
+
+        let programs = Programs::new(layout, cfg, dispatch.clone(), win.feedback.clone(), favorites);
+        let settings = Settings::new(layout, cfg, dispatch.clone());
+        let stack = gtk::Stack::new();
+        stack.set_transition_type(gtk::StackTransitionType::None);
+        for page in Page::ALL {
+            let child: gtk::Widget = match page {
+                Page::Today => today_page.clone().upcast(),
+                Page::Programs => programs.programs.clone().upcast(),
+                Page::LinuxTools => programs.tools.clone().upcast(),
+                Page::Settings => settings.settings.clone().upcast(),
+                Page::About => settings.about.clone().upcast(),
+                Page::Screen => settings.screen.clone().upcast(),
+                Page::Network => settings.network.clone().upcast(),
+                Page::LinuxSettings => settings.linux_settings.clone().upcast(),
+            };
+            stack.add_named(&child, Some(page.title()));
+        }
+        stack.set_visible_child_name(Page::Today.title());
+        win.set_content(&stack);
 
         let today = Rc::new(Self {
             win,
             cfg: cfg.clone(),
             layout: layout.clone(),
             dispatch,
+            stack,
+            programs,
+            settings,
             date,
-            time,
             summary,
             shortcuts,
             recent,
-            running_col,
+            running_item,
             running,
             running_count: std::cell::Cell::new(0),
             forgotten: Default::default(),
-            info,
         });
         today.tick();
         let t = Rc::downgrade(&today);
@@ -182,17 +229,23 @@ impl Today {
         today
     }
 
+    /// Switch to one of the shell screens.
+    pub fn show_page(&self, page: Page) {
+        self.settings.refresh(page);
+        self.stack.set_visible_child_name(page.title());
+    }
+
+    pub fn set_apps(&self, apps: &[AppEntry]) {
+        self.programs.set_apps(apps);
+        self.settings.set_apps(apps);
+    }
+
     fn tick(&self) {
         let Ok(now) = glib::DateTime::now_local() else { return };
         if let Ok(s) = now.format("%A, %e %B %Y") {
             let s = s.replace("  ", " ");
             if self.date.text() != s {
                 self.date.set_text(&s);
-            }
-        }
-        if let Ok(s) = now.format("%H:%M") {
-            if self.time.text() != s {
-                self.time.set_text(&s);
             }
         }
         self.update_summary(&now);
@@ -217,59 +270,43 @@ impl Today {
         for e in entries {
             self.running.append(&switcher_row(&SwitcherEntry { active: false, ..e.clone() }, self.cfg.design.icon_px));
         }
-        self.running_col.set_visible(!entries.is_empty());
+        self.running_item.set_visible(!entries.is_empty());
         self.running_count.set(entries.len());
         if let Ok(now) = glib::DateTime::now_local() {
             self.update_summary(&now);
         }
     }
 
+    /// Favorites: a single grid of program icons.
     pub fn set_shortcuts(&self, entries: &[&AppEntry]) {
-        while let Some(c) = self.shortcuts.first_child() {
-            self.shortcuts.remove(&c);
-        }
-        let cols = self.layout.today_columns as i32;
+        super::programs::clear(&self.shortcuts);
         let d = &self.cfg.design;
-        for (i, entry) in entries.iter().enumerate() {
-            let button = gtk::Button::new();
-            button.add_css_class("shortcut");
-            let content = gtk::Box::new(gtk::Orientation::Vertical, 1);
-            content.append(&super::icon_image(
-                apps::gicon(entry).as_ref(),
-                "application-x-executable",
-                d.today_icon_px,
-            ));
-            let label = gtk::Label::new(Some(&entry.name));
-            label.set_wrap(true);
-            label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-            label.set_lines(2);
-            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            label.set_justify(gtk::Justification::Center);
-            label.set_max_width_chars(10);
-            content.append(&label);
-            button.set_child(Some(&content));
-            button.set_tooltip_text(Some(&entry.name));
+        let buttons: Vec<gtk::Button> = entries
+            .iter()
+            .map(|entry| {
+                let icon = super::icon_image(apps::gicon(entry).as_ref(), "application-x-executable", d.today_icon_px);
+                let button = super::grid_button(icon, &entry.name);
+                button.update_property(&[gtk::accessible::Property::Label(&entry.name)]);
+                let id = entry.id.clone();
+                let dsp = self.dispatch.clone();
+                button.connect_clicked(move |_| dsp(Command::Shell(Event::Launch(id.clone()))));
 
-            let id = entry.id.clone();
-            let dsp = self.dispatch.clone();
-            button.connect_clicked(move |_| dsp(Command::Shell(Event::Launch(id.clone()))));
-
-            let (id, dsp) = (entry.id.clone(), self.dispatch.clone());
-            super::context_menu(&button, &self.win.feedback, &self.cfg, move || {
-                let (a, b) = (dsp.clone(), dsp.clone());
-                let (ia, ib) = (id.clone(), id.clone());
-                vec![
-                    MenuItem::new("Open", move || a(Command::Shell(Event::Launch(ia.clone())))),
-                    MenuItem::new("Remove from Today", move || b(Command::RemoveShortcut(ib.clone()))),
-                ]
-            });
-            self.shortcuts.attach(&button, i as i32 % cols, i as i32 / cols, 1, 1);
-        }
-        if entries.is_empty() {
-            let l = gtk::Label::new(Some("No shortcuts. Long-press a program in Start to add one."));
-            l.add_css_class("dim");
-            l.set_wrap(true);
-            self.shortcuts.attach(&l, 0, 0, cols, 1);
+                let (id, dsp) = (entry.id.clone(), self.dispatch.clone());
+                super::context_menu(&button, &self.win.feedback, &self.cfg, move || {
+                    let (a, b) = (dsp.clone(), dsp.clone());
+                    let (ia, ib) = (id.clone(), id.clone());
+                    vec![
+                        MenuItem::new("Open", move || a(Command::Shell(Event::Launch(ia.clone())))),
+                        MenuItem::new("Remove from favorites", move || b(Command::RemoveShortcut(ib.clone()))),
+                    ]
+                });
+                button
+            })
+            .collect();
+        if buttons.is_empty() {
+            self.shortcuts.append(&line("Hold the stylus on a program in Programs to add it here."));
+        } else {
+            self.shortcuts.append(&super::icon_grid(buttons, self.layout.today_columns, d.spacing_px));
         }
     }
 
@@ -303,10 +340,10 @@ impl Today {
             let uri = file.uri().to_string();
             let row = gtk::ListBoxRow::new();
             row.set_widget_name(&uri);
-            let b = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            let b = gtk::Box::new(gtk::Orientation::Horizontal, self.cfg.design.padding_px as i32);
             let name = doc.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let (content_type, _) = gio::content_type_guess(Some(&doc.path), None::<&[u8]>);
-            b.append(&super::icon_image(Some(&gio::content_type_get_icon(&content_type)), "text-x-generic", px));
+            b.append(&super::named_icon(document_icon(&content_type), px));
             let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
             text.set_valign(gtk::Align::Center);
             let title = gtk::Label::new(Some(&name));
@@ -345,18 +382,22 @@ impl Today {
         if docs.is_empty() {
             let row = gtk::ListBoxRow::new();
             row.set_activatable(false);
-            let l = gtk::Label::new(Some("No documents yet."));
-            l.add_css_class("dim");
-            l.set_xalign(0.0);
-            row.set_child(Some(&l));
+            row.set_child(Some(&line("No documents yet")));
             self.recent.append(&row);
         }
     }
+}
 
-    pub fn refresh_info(&self) {
-        let l = &self.layout;
-        let mut lines = info::system_lines();
-        lines.push(format!("Screen {}×{} {}", l.screen.width, l.screen.height, l.orientation.name()));
-        self.info.set_text(&lines.join("\n"));
+#[cfg(test)]
+mod tests {
+    use super::document_icon;
+
+    #[test]
+    fn documents_get_a_matching_icon() {
+        assert_eq!(document_icon("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"), "pda-doc-spreadsheet");
+        assert_eq!(document_icon("application/pdf"), "pda-doc-pdf");
+        assert_eq!(document_icon("text/html"), "pda-doc-web");
+        assert_eq!(document_icon("text/markdown"), "pda-doc-text");
+        assert_eq!(document_icon("image/png"), "pda-doc");
     }
 }

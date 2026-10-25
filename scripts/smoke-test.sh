@@ -79,16 +79,19 @@ tap() { xdotool mousemove "$1" "$2"; sleep 0.15; xdotool click 1; }
 # Finds shell widgets by their accessible name (scripts/lib/pda_ui.py).
 ui() { python3 "$REPO/scripts/lib/pda_ui.py" "$@" 2>/dev/null; }
 shot() { import -window root "$SHOTS/$ORIENT-$1.png"; }
+found_shell() { ui find pda-shell "$@" >/dev/null; }
 
 run_orientation() {
     ORIENT="$1"
     case "$ORIENT" in portrait) W=600; H=1024 ;; landscape) W=1024; H=600 ;; esac
-    TOP=24; BOTTOM=26
-    WORKAREA="0,$TOP,$W,$((H - TOP - BOTTOM))"
     echo "== $ORIENT ${W}x${H}"
 
     local ready; ready="$(mktemp)"; rm -f "$ready"
+    # A fresh HOME: leftovers of earlier sessions (e.g. Mousepad offering to
+    # restore a killed session) must not change what the test sees.
+    local home; home="$(mktemp -d "${TMPDIR:-/tmp}/pda-smoke-home.XXXXXX")"
     "$REPO/scripts/dev-session.sh" --orientation "$ORIENT" --headless --no-build --ready-file "$ready" \
+        --home "$home" --reset-home \
         > "$SHOTS/$ORIENT-session.out" 2>&1 &
     local session=$!
     if ! WAIT=200 wait_for test -s "$ready"; then
@@ -102,9 +105,14 @@ run_orientation() {
     export DBUS_SESSION_BUS_ADDRESS
     DBUS_SESSION_BUS_ADDRESS="$(tr '\0' '\n' < "/proc/$(cat "$SESSION_SHELL_PID")/environ" | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p')"
     sleep 1
+    # Bar heights come from the density profile; read them from the work area.
+    local wa_h
+    IFS=, read -r _ TOP _ wa_h <<< "$(root_prop _NET_WORKAREA | tr -d ' ')"
+    BOTTOM=$((H - TOP - wa_h))
+    WORKAREA="0,$TOP,$W,$wa_h"
 
     # --- session and shell surfaces
-    check "work area reserved by bars is $WORKAREA" [ "$(root_prop _NET_WORKAREA | tr -d ' ')" = "$WORKAREA" ]
+    check "bars reserve the screen edges (top $TOP, bottom $BOTTOM)" [ "$TOP" -gt 0 -a "$BOTTOM" -gt 0 ]
     local top="" bottom="" desk=""
     for w in $(clients); do
         case "$(type_of "$w"):$(geom "$w")" in
@@ -139,8 +147,26 @@ run_orientation() {
     shot thunar
     check "status bar stays above applications (bar still at top)" [ "$(geom "$top")" = "0,0,$W,$TOP" ]
 
+    # --- Programs and Settings are shell screens on the desktop surface
+    # The drop-down sizes itself to its content when it maps; let it settle.
+    tap 30 12; wait_for mapped_named Start; sleep 0.5
+    ui tap pda-shell "list item" "^Settings$" --frame "^Start$" >/dev/null
+    check "Start > Settings shows the desktop" wait_for showing_desktop 1
+    check "Settings shows About" wait_for found_shell button "^About$" --frame "^Today$"
+    ui tap pda-shell button "^About$" --frame "^Today$" >/dev/null
+    check "About shows the operating system" wait_for found_shell label "^Operating system$" --frame "^Today$"
+    shot settings-about
+    ui tap pda-shell button "^OK$" --frame "command bar" >/dev/null
+    check "OK returns to Settings" wait_for found_shell button "^Screen$" --frame "^Today$"
+    tap 30 12; wait_for mapped_named Start; sleep 0.5
+    ui tap pda-shell "list item" "^Programs$" --frame "^Start$" >/dev/null
+    check "Programs lists Linux tools" wait_for found_shell button "^Linux tools$" --frame "^Today$"
+    shot programs
+    ui tap pda-shell button "^Today$" --frame "command bar" >/dev/null
+    check "Today button returns to the Today screen" wait_for found_shell "list item" "Budget 2026.xlsx" --frame "^Today$"
+
     # --- switcher
-    tap 100 $((H - 13))
+    tap 100 $((H - BOTTOM / 2))
     check "switcher popover opens" wait_for has_popup
     shot switcher
     ui tap pda-shell "list item" "Mousepad" --frame "command bar" >/dev/null
@@ -148,7 +174,7 @@ run_orientation() {
     check "switcher popover closes" wait_for no_popup
 
     # --- Today
-    tap 30 $((H - 13))
+    tap 30 $((H - BOTTOM / 2))
     check "Today button shows the desktop" wait_for showing_desktop 1
     sleep 0.3
     shot today-with-apps
@@ -173,16 +199,15 @@ run_orientation() {
     check "Start button toggles the menu closed" wait_for unmapped_named Start
 
     # --- close the active application
-    tap 100 $((H - 13)); wait_for has_popup
+    tap 100 $((H - BOTTOM / 2)); wait_for has_popup
     ui tap pda-shell "list item" "Mousepad" --frame "command bar" >/dev/null
     wait_for is_active_class Mousepad
-    tap $((W - 50)) $((H - 13))
+    ui tap pda-shell button "^Close$" --frame "command bar" >/dev/null
     check "Close in the command bar closes Mousepad" wait_for no_class Mousepad
 
     # --- end session: closes remaining apps gracefully, then exits
-    tap 30 12; wait_for mapped_named Start
-    local menu_w=$W; [ "$ORIENT" = landscape ] && menu_w=300
-    tap $((menu_w * 5 / 6)) $((H - BOTTOM - 10))
+    tap 30 12; wait_for mapped_named Start; sleep 0.5
+    ui tap pda-shell "list item" "^End session$" --frame "^Start$" >/dev/null
     check "End session closes Thunar" wait_long no_class Thunar
     local t=100; while kill -0 "$session" 2>/dev/null && [ $t -gt 0 ]; do sleep 0.1; t=$((t - 1)); done
     check "session script exits after End session" bash -c "! kill -0 $session 2>/dev/null"
@@ -190,7 +215,7 @@ run_orientation() {
     check "session exited with status 0 (got $status)" [ "$status" -eq 0 ]
     check "no session processes left behind" no_leftovers "pda-$ORIENT-$session-"
     cp "$LOG_DIR/shell.log" "$SHOTS/$ORIENT-shell.log" 2>/dev/null
-    rm -f "$ready" "$SESSION_SHELL_PID"
+    rm -rf "$ready" "$SESSION_SHELL_PID" "$home"
 }
 
 for o in "${ORIENTATIONS[@]}"; do run_orientation "$o"; done
