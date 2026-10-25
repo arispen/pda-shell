@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Notes
+GenericName=Notes
+Comment=Write quick notes
+Exec=pda-notes
+Icon=pda-app-notes
+Terminal=false
+Categories=Utility;TextEditor;
+Keywords=note;memo;text;
+StartupWMClass=pda-notes
+Actions=new-note;
+
+[Desktop Action new-note]
+Name=New note
+Exec=pda-notes --new

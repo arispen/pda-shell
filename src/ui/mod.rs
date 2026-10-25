@@ -4,6 +4,7 @@ pub mod command_bar;
 pub mod escape;
 pub mod programs;
 pub mod settings;
+pub mod sip;
 pub mod start_menu;
 pub mod status_bar;
 pub mod today;
@@ -87,6 +88,18 @@ window.menu-bar button:disabled label {{ color: {text_dim}; }}
 window.menu-bar separator {{ background: {menu_border}; min-width: 1px; margin: {sep_margin}px 0; }}
 window.menu-bar .sip image {{ -gtk-icon-size: {sip_icon}px; }}
 window.menu-bar .arrow {{ font-size: {small_px}px; }}
+window.menu-bar .sip-chooser > button {{ min-width: 0; padding: 0 2px; }}
+
+/* Built-in input panel */
+window.sip-panel {{ background: {menu_bg_end}; border-top: 1px solid {menu_border}; }}
+window.sip-panel button.sip-key {{
+    background: linear-gradient(to bottom, {surface}, {menu_bg});
+    color: {text}; border: 1px solid {menu_border}; border-radius: 2px;
+    margin: 1px; padding: 0; min-height: 0; min-width: 0;
+}}
+window.sip-panel button.sip-key label {{ color: {text}; }}
+window.sip-panel button.sip-key:active, window.sip-panel button.sip-key.latched {{ background: {accent}; }}
+window.sip-panel button.sip-key:active label, window.sip-panel button.sip-key.latched label {{ color: {accent_fg}; }}
 
 /* Today */
 window.today {{ background: {surface}; }}
@@ -110,6 +123,10 @@ window.today {{ background: {surface}; }}
 .grid-item:active {{ background: {accent}; border-color: {bar_pressed}; }}
 .grid-item:active label {{ color: {accent_fg}; }}
 .page-note {{ padding: {pad}px {pad2}px; }}
+.ask-bar {{ background: {surface_alt}; border-bottom: 1px solid {border}; padding: {pad}px {pad2}px; }}
+.ask-bar button {{ min-height: {target}px; min-width: {target}px; }}
+.ask-bar entry {{ min-height: {row}px; }}
+window.native textview, window.native textview text {{ background: {surface}; color: {text}; }}
 
 /* Lists (recent documents, Start menu, switcher, Settings pages) */
 list.compact, list.compact row {{ background: transparent; }}
@@ -149,6 +166,9 @@ window.bar popover.pda row:selected label, window.bar popover.pda row:active lab
 popover.pda modelbutton {{ min-height: {target}px; padding: 0 {pad2}px; border-radius: 0; }}
 popover.pda modelbutton:hover {{ background: {accent}; color: {accent_fg}; }}
 popover.pda separator {{ margin: 2px 0; }}
+popover.pda list.menu-list row {{ padding: 0 {pad2}px 0 {pad}px; }}
+popover.pda .menu-mark {{ min-width: {font_px}px; color: {accent}; }}
+popover.pda list.menu-list row:disabled label {{ color: {text_dim}; }}
 
 /* Exit full screen: unmanaged, above full-screen programs */
 window.escape {{ background: {bar_bg_end}; }}

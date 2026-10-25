@@ -113,7 +113,7 @@ ln -sfn "$LOG_DIR" "$SESSION_ROOT/logs/latest"
 # file associations, Thunar list view). Bump SEED_VERSION when either
 # changes: existing homes then get the new files, but files the developer
 # already has (and may have edited) are never replaced.
-SEED_VERSION=2
+SEED_VERSION=3
 if [ "$(cat "$SESSION_HOME/.seed-version" 2>/dev/null)" != "$SEED_VERSION" ]; then
     mkdir -p "$SESSION_HOME/Documents" "$SESSION_HOME/.config" "$SESSION_HOME/.local/share" "$SESSION_HOME/.cache"
     cp -Rn "$REPO/assets/sample-files/." "$SESSION_HOME/Documents/" 2>/dev/null || true
@@ -187,6 +187,11 @@ for _ in $(seq 100); do
     sleep 0.1
 done
 xdpyinfo -display "$NESTED" >/dev/null 2>&1 || { log "X server did not come up"; exit 1; }
+# The display answered; make sure it is ours and not a previous server on
+# the same number that was still going away.
+sleep 0.2
+kill -0 "$XSERVER_PID" 2>/dev/null || { log "X server exited; see $LOG_DIR/xserver.log"; exit 1; }
+xdpyinfo -display "$NESTED" >/dev/null 2>&1 || { log "X server did not come up"; exit 1; }
 
 # --- environment for everything inside the session ---------------------------
 export DISPLAY="$NESTED"
@@ -203,7 +208,10 @@ export XDG_RUNTIME_DIR="$RUNTIME_DIR"
 export PDA_SHELL_CONFIG="${PDA_SHELL_CONFIG:-$REPO/config/pda-shell.toml}"
 export PDA_SHELL_ORIENTATION="$ORIENTATION"
 # Session helpers (pda-onboard) are found before system programs.
-export PATH="$REPO/scripts/bin:$PATH"
+# The shell's native programs (pda-files, pda-notes) are found next to
+# the shell binary; their desktop entries are in config/share.
+export PATH="$REPO/scripts/bin:$(dirname "$SHELL_BIN"):$PATH"
+export XDG_DATA_DIRS="$REPO/config/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 [ -n "$DENSITY" ] && export PDA_SHELL_DENSITY="$DENSITY"
 export RUST_LOG="${RUST_LOG:-pda_shell=debug,info}"
 
@@ -215,12 +223,27 @@ export DBUS_SESSION_BUS_ADDRESS
 PIDS+=("$DBUS_PID")
 log "session bus $DBUS_SESSION_BUS_ADDRESS (pid $DBUS_PID)"
 
-openbox --config-file "$REPO/config/openbox/rc.xml" > "$LOG_DIR/openbox.log" 2>&1 &
-PIDS+=("$!")
-for _ in $(seq 50); do
-    xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q 'window id' && break
-    sleep 0.1
+# Openbox can fail to open a display that is still settling (e.g. right
+# after the previous session's server on the same number went away):
+# start it again until it manages the screen.
+wm_ready() { xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q 'window id'; }
+for attempt in 1 2 3 4 5; do
+    openbox --config-file "$REPO/config/openbox/rc.xml" >> "$LOG_DIR/openbox.log" 2>&1 &
+    OPENBOX_PID=$!
+    for _ in $(seq 50); do
+        wm_ready && break
+        kill -0 "$OPENBOX_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    if wm_ready && kill -0 "$OPENBOX_PID" 2>/dev/null; then
+        PIDS+=("$OPENBOX_PID")
+        break
+    fi
+    kill "$OPENBOX_PID" 2>/dev/null
+    log "openbox did not start (attempt $attempt); retrying"
+    sleep 0.5
 done
+wm_ready || { log "openbox is not running; see $LOG_DIR/openbox.log"; exit 1; }
 log "openbox running"
 
 if [ "$RUN_SHELL" -eq 0 ]; then

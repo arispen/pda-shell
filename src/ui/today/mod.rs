@@ -84,7 +84,7 @@ fn list() -> gtk::ListBox {
 }
 
 /// Icon for a document: one of the shell's document icons by content type.
-fn document_icon(content_type: &str) -> &'static str {
+pub fn document_icon(content_type: &str) -> &'static str {
     let t = content_type.to_lowercase();
     if t.contains("spreadsheet") || t.contains("excel") || t.contains("csv") {
         "pda-doc-spreadsheet"

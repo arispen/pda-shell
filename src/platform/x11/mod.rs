@@ -7,9 +7,10 @@
 //! (`geometry:` lines in the shell log).
 
 pub mod gtk_glue;
+pub mod keys;
 pub mod settings;
 
-use super::{AppWindow, SurfaceRole, WindowId, WindowSnapshot, WindowSystem};
+use super::{AppWindow, KeyChord, SurfaceRole, WindowId, WindowSnapshot, WindowSystem};
 use crate::shell::layout::{fit_within, Rect};
 use std::collections::{HashMap, HashSet};
 use x11rb::connection::Connection;
@@ -52,6 +53,10 @@ x11rb::atom_manager! {
         _NET_MOVERESIZE_WINDOW,
         _XSETTINGS_SETTINGS,
         MANAGER,
+        _GTK_UNIQUE_BUS_NAME,
+        _GTK_MENUBAR_OBJECT_PATH,
+        _GTK_APPLICATION_OBJECT_PATH,
+        _GTK_WINDOW_OBJECT_PATH,
     }
 }
 
@@ -66,6 +71,8 @@ pub struct X11 {
     screen: usize,
     root: Window,
     atoms: Atoms,
+    /// Keyboard mapping for typing, read on first use.
+    keymap: std::cell::RefCell<Option<keys::Keymap>>,
 }
 
 impl X11 {
@@ -73,7 +80,7 @@ impl X11 {
         let (conn, screen) = RustConnection::connect(None)?;
         let root = conn.setup().roots[screen].root;
         let atoms = Atoms::new(&conn)?.reply()?;
-        Ok(Self { conn, screen, root, atoms })
+        Ok(Self { conn, screen, root, atoms, keymap: Default::default() })
     }
 
     fn send_root_message(&self, window: Window, kind: u32, data: [u32; 5]) -> Result<()> {
@@ -201,6 +208,60 @@ impl X11 {
         Ok(())
     }
 
+    /// Type a key (with modifiers) into whatever window has the keyboard
+    /// focus, as if pressed on a hardware keyboard (XTEST).
+    pub fn send_key(&self, chord: KeyChord) -> Result<()> {
+        use x11rb::protocol::xtest::ConnectionExt as _;
+        let mut map = self.keymap.borrow_mut();
+        if map.is_none() {
+            let setup = self.conn.setup();
+            let (min, max) = (setup.min_keycode, setup.max_keycode);
+            let reply = self.conn.get_keyboard_mapping(min, max - min + 1)?.reply()?;
+            *map = Some(keys::Keymap {
+                min_keycode: min,
+                per_keycode: reply.keysyms_per_keycode as usize,
+                syms: reply.keysyms,
+            });
+        }
+        let map = map.as_mut().expect("keymap");
+        let sym = keys::keysym(chord.key);
+        let (code, level) = match map.find(sym) {
+            Some(found) => found,
+            None => {
+                // Not on the keyboard (e.g. a symbol of another language):
+                // put it on an unused keycode, like xdotool does.
+                let code = map.spare().ok_or("no spare keycode for the symbol")?;
+                let syms = vec![sym; map.per_keycode];
+                self.conn.change_keyboard_mapping(1, code, map.per_keycode as u8, &syms)?.check()?;
+                map.set(code, sym);
+                (code, 0)
+            }
+        };
+        let modifier = |sym: u32| map.find(sym).map(|(c, _)| c);
+        let mut mods = Vec::new();
+        if chord.ctrl {
+            mods.extend(modifier(keys::CONTROL_L));
+        }
+        if chord.alt {
+            mods.extend(modifier(keys::ALT_L));
+        }
+        if chord.shift || level == 1 {
+            mods.extend(modifier(keys::SHIFT_L));
+        }
+        const PRESS: u8 = 2;
+        const RELEASE: u8 = 3;
+        for m in &mods {
+            self.conn.xtest_fake_input(PRESS, *m, CURRENT_TIME, self.root, 0, 0, 0)?;
+        }
+        self.conn.xtest_fake_input(PRESS, code, CURRENT_TIME, self.root, 0, 0, 0)?;
+        self.conn.xtest_fake_input(RELEASE, code, CURRENT_TIME, self.root, 0, 0, 0)?;
+        for m in mods.iter().rev() {
+            self.conn.xtest_fake_input(RELEASE, *m, CURRENT_TIME, self.root, 0, 0, 0)?;
+        }
+        self.conn.flush()?;
+        Ok(())
+    }
+
     /// The work area the window manager computed from all struts.
     pub fn workarea(&self) -> Result<Option<Rect>> {
         let reply = self
@@ -268,6 +329,7 @@ pub struct ClientInfo {
     pub skip_taskbar: bool,
     pub fullscreen: bool,
     pub transient_for: Option<u32>,
+    pub menus: Option<super::AppMenus>,
 }
 
 impl ClientInfo {
@@ -323,7 +385,11 @@ pub fn resolve_active(
     if is_app(id) {
         return Some(WindowId(id));
     }
-    let client = clients.iter().find(|c| c.id == id)?;
+    // Not managed (yet): e.g. the Start menu just mapped and activated before
+    // the window manager lists it. The program in front has not changed.
+    let Some(client) = clients.iter().find(|c| c.id == id) else {
+        return previous.filter(|p| is_app(p.0));
+    };
     if let Some(parent) = client.transient_for.filter(|p| is_app(*p)) {
         return Some(WindowId(parent));
     }
@@ -420,6 +486,15 @@ impl Watcher {
                 .first()
                 .copied()
                 .filter(|w| *w != 0),
+            menus: {
+                let text = |atom| String::from_utf8_lossy(&self.prop_bytes(id, atom, a.UTF8_STRING)).into_owned();
+                super::AppMenus::from_properties(
+                    &text(a._GTK_UNIQUE_BUS_NAME),
+                    &text(a._GTK_MENUBAR_OBJECT_PATH),
+                    &text(a._GTK_APPLICATION_OBJECT_PATH),
+                    &text(a._GTK_WINDOW_OBJECT_PATH),
+                )
+            },
         }
     }
 
@@ -450,6 +525,7 @@ impl Watcher {
                 app_class: c.class.clone(),
                 pid: c.pid,
                 fullscreen: c.fullscreen,
+                menus: c.menus.clone(),
             })
             .collect();
         let active_raw =
@@ -534,7 +610,14 @@ impl Watcher {
             ]
             .contains(&e.atom),
             Event::PropertyNotify(e) => {
-                [a._NET_WM_NAME, AtomEnum::WM_NAME.into(), a._NET_WM_STATE, a._NET_WM_WINDOW_TYPE].contains(&e.atom)
+                [
+                    a._NET_WM_NAME,
+                    AtomEnum::WM_NAME.into(),
+                    a._NET_WM_STATE,
+                    a._NET_WM_WINDOW_TYPE,
+                    a._GTK_MENUBAR_OBJECT_PATH,
+                ]
+                .contains(&e.atom)
             }
             // A dialog that resizes itself after mapping is checked again.
             Event::ConfigureNotify(e) => match self.dialogs.get_mut(&e.window) {
@@ -621,6 +704,7 @@ mod tests {
             app_class: c.class.clone(),
             pid: c.pid,
             fullscreen: c.fullscreen,
+            menus: None,
         }
     }
 
@@ -693,5 +777,9 @@ mod tests {
         assert_eq!(resolve_active(&clients, &apps, None, prev, OWN), None);
         // A previous window that has since closed is not resurrected.
         assert_eq!(resolve_active(&clients, &apps, Some(3), Some(WindowId(9)), OWN), None);
+        // Active but not managed yet (the Start menu right after mapping):
+        // the program in front stays.
+        assert_eq!(resolve_active(&clients, &apps, Some(77), prev, OWN), Some(WindowId(1)));
+        assert_eq!(resolve_active(&clients, &apps, Some(77), None, OWN), None);
     }
 }

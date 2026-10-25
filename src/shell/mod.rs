@@ -12,6 +12,7 @@ use crate::platform::x11::{self, gtk_glue, X11};
 use crate::platform::{SurfaceRole, WindowId, WindowSystem};
 use crate::ui::command_bar::{CommandBar, SwitcherEntry};
 use crate::ui::escape::FullscreenEscape;
+use crate::ui::sip::InputPanel;
 use crate::ui::start_menu::StartMenu;
 use crate::ui::status_bar::StatusBar;
 use crate::ui::today::Today;
@@ -34,6 +35,14 @@ pub enum Command {
     AddShortcut(String),
     RemoveShortcut(String),
     ForgetRecent(String),
+    /// Type a shortcut into the program in front (generic menu commands).
+    SendKey(crate::platform::KeyChord),
+    /// Switch the input panel ("pocketpc" or "onboard").
+    SetInputPanel(String),
+    /// Onboard reported its visibility.
+    OnboardVisible(bool),
+    /// A desktop action of an application (e.g. Notes' new note).
+    LaunchAction(String, String),
 }
 
 pub type Dispatch = Rc<dyn Fn(Command)>;
@@ -42,6 +51,30 @@ pub type Dispatch = Rc<dyn Fn(Command)>;
 /// is the same tap; it must not reopen the menu.
 const MENU_REOPEN_GUARD: Duration = Duration::from_millis(300);
 const END_SESSION_TIMEOUT: Duration = Duration::from_secs(15);
+/// A generic command's keys are typed once its menu has closed and the
+/// program has the focus again.
+const KEY_DELAY: Duration = Duration::from_millis(250);
+
+/// Ids of the shell's native programs (desktop entries).
+pub const NOTES_APP: &str = "pda-notes.desktop";
+pub const FILES_APP: &str = "pda-files.desktop";
+const SPREADSHEET_APP: &str = "org.gnumeric.gnumeric.desktop";
+
+/// The New menu on Today: what can be created with what is installed.
+fn new_items(apps: &[AppEntry]) -> Vec<(String, Command)> {
+    let has = |id: &str| apps.iter().any(|a| a.id == id);
+    let mut items = Vec::new();
+    if has(NOTES_APP) {
+        items.push(("Note".to_string(), Command::LaunchAction(NOTES_APP.into(), "new-note".into())));
+    }
+    if has(SPREADSHEET_APP) {
+        items.push(("Spreadsheet".to_string(), Command::Shell(Event::Launch(SPREADSHEET_APP.into()))));
+    }
+    if has(FILES_APP) {
+        items.push(("Folder".to_string(), Command::LaunchAction(FILES_APP.into(), "new-folder".into())));
+    }
+    items
+}
 
 pub struct Shell {
     app: gtk::Application,
@@ -58,6 +91,10 @@ pub struct Shell {
     start: Rc<StartMenu>,
     escape: Rc<FullscreenEscape>,
     keyboard: RefCell<Keyboard>,
+    /// The built-in input panel.
+    sip: Rc<InputPanel>,
+    /// Which input panel the keyboard button shows.
+    panel: RefCell<String>,
     menu_closed_at: Cell<Option<Instant>>,
     /// Kept alive so installs and removals keep being reported.
     app_monitor: RefCell<Option<gio::AppInfoMonitor>>,
@@ -105,8 +142,17 @@ impl Shell {
             StartMenu::new(app, &layout, &x11, &cfg, dispatch.clone(), shortcuts.clone(), recent_apps.clone());
         let escape = FullscreenEscape::new(app, &layout, &x11, &cfg, dispatch.clone());
         let d = dispatch.clone();
-        let on_keyboard_visible: Rc<dyn Fn(bool)> = Rc::new(move |v| d(Command::Shell(Event::KeyboardVisible(v))));
+        let on_keyboard_visible: Rc<dyn Fn(bool)> = Rc::new(move |v| d(Command::OnboardVisible(v)));
         let keyboard = RefCell::new(Keyboard::new(cfg.keyboard.clone(), &layout, on_keyboard_visible));
+        let sip = InputPanel::new(app, keyboard.borrow().rect(), &x11, &cfg);
+        let panel = match cfg.keyboard.panel.as_str() {
+            p @ ("pocketpc" | "onboard") => p.to_string(),
+            other => {
+                log::warn!("unknown input panel {other:?}; using onboard");
+                "onboard".into()
+            }
+        };
+        command.set_input_panel(&panel);
 
         let shell = Rc::new(Self {
             app: app.clone(),
@@ -122,6 +168,8 @@ impl Shell {
             start,
             escape,
             keyboard,
+            sip,
+            panel: RefCell::new(panel),
             menu_closed_at: Cell::new(None),
             app_monitor: RefCell::new(None),
             dispatch,
@@ -186,6 +234,7 @@ impl Shell {
         log::info!("{} applications installed", apps.len());
         self.start.set_apps(apps.clone());
         self.today.set_apps(&apps);
+        self.command.set_new_items(new_items(&apps));
         *self.apps.borrow_mut() = apps;
         self.refresh_shortcuts();
     }
@@ -229,6 +278,30 @@ impl Shell {
                     }
                 }
             }
+            Command::SendKey(chord) => {
+                // The program in front gets the keys; make sure it has the
+                // focus once the menu that sent them has closed.
+                self.refocus_app();
+                let x11 = self.x11.clone();
+                glib::timeout_add_local_once(KEY_DELAY, move || {
+                    if let Err(e) = x11.send_key(chord) {
+                        log::warn!("cannot type {chord:?}: {e}");
+                    }
+                });
+            }
+            Command::SetInputPanel(name) => self.set_input_panel(name),
+            Command::OnboardVisible(v) => {
+                // A report from Onboard after switching to the built-in panel
+                // must not hide the panel now in use.
+                if *self.panel.borrow() == "onboard" {
+                    self.handle(Event::KeyboardVisible(v));
+                }
+            }
+            Command::LaunchAction(id, action) => {
+                if let Err(e) = apps::launch_action(&id, &action) {
+                    log::error!("cannot launch {id} {action}: {e}");
+                }
+            }
             Command::AddShortcut(id) => self.edit_shortcuts(|s| shortcuts::add(s, &id)),
             Command::RemoveShortcut(id) => self.edit_shortcuts(|s| shortcuts::remove(s, &id)),
             Command::ForgetRecent(uri) => {
@@ -238,6 +311,48 @@ impl Shell {
                 }
                 self.today.forget(&uri);
             }
+        }
+    }
+
+    /// Give the keyboard focus back to the program in front: a tap in the
+    /// command bar's menus can leave it in the shell, and the input panel
+    /// types into whatever has the focus.
+    fn refocus_app(&self) {
+        if let View::App(id) = self.state.borrow().view() {
+            self.x11.activate(id);
+        }
+    }
+
+    fn show_panel(&self, visible: bool) {
+        if visible {
+            self.refocus_app();
+        }
+        if *self.panel.borrow() == "pocketpc" {
+            self.sip.set_visible(visible);
+            // Shown at once, unlike Onboard which reports it over D-Bus.
+            let d = self.dispatch.clone();
+            glib::idle_add_local_once(move || d(Command::Shell(Event::KeyboardVisible(visible))));
+        } else {
+            self.keyboard.borrow_mut().set_visible(visible);
+        }
+    }
+
+    fn set_input_panel(&self, name: String) {
+        if *self.panel.borrow() == name || !crate::keyboard::PANELS.iter().any(|(_, n)| *n == name) {
+            return;
+        }
+        let visible = self.state.borrow().keyboard_visible();
+        if visible {
+            self.show_panel(false);
+        }
+        log::info!("input panel: {name}");
+        *self.panel.borrow_mut() = name.clone();
+        self.command.set_input_panel(&name);
+        // Both panels use the same reserved space; the new one takes over.
+        if visible {
+            self.show_panel(true);
+        } else {
+            self.refocus_app();
         }
     }
 
@@ -279,7 +394,7 @@ impl Shell {
                 Err(e) => log::error!("cannot launch {id}: {e}"),
             },
             Effect::ShowPage(page) => self.today.show_page(page),
-            Effect::SetKeyboard(visible) => self.keyboard.borrow_mut().set_visible(visible),
+            Effect::SetKeyboard(visible) => self.show_panel(visible),
             Effect::ReserveKeyboard(visible) => {
                 let extra = if visible { self.keyboard.borrow().rect().height } else { 0 };
                 // Today and the Start menu shrink like applications do, so
@@ -302,12 +417,15 @@ impl Shell {
             Effect::Quit => {
                 log::info!("all programs closed; ending session");
                 self.keyboard.borrow_mut().stop();
+                self.sip.set_visible(false);
                 self.app.quit();
             }
         }
     }
 
     fn refresh_ui(&self) {
+        // A window that appeared or was raised must not cover the panel.
+        self.sip.raise();
         let st = self.state.borrow();
         self.status.set_title(&st.title());
         self.status.set_start_open(st.start_menu_open());
@@ -318,6 +436,9 @@ impl Shell {
             View::App(id) => Some(id),
             View::Today => None,
         };
+        if let Some(w) = active.and_then(|id| st.window(id)) {
+            self.command.set_app(w.id, w.menus.as_ref());
+        }
         let apps = self.apps.borrow();
         let entries: Vec<SwitcherEntry> = st
             .switcher_entries()

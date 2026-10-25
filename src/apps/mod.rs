@@ -168,6 +168,18 @@ pub fn launch(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Launch a desktop action of an application (`[Desktop Action NAME]`),
+/// e.g. Notes' "new-note".
+pub fn launch_action(id: &str, action: &str) -> Result<(), String> {
+    let info = gio::DesktopAppInfo::new(id).ok_or_else(|| format!("{id} is not installed"))?;
+    if !info.list_actions().iter().any(|a| a == action) {
+        return Err(format!("{id} has no action {action}"));
+    }
+    info.launch_action(action, launch_context().as_ref());
+    log::info!("launched {id} action {action}");
+    Ok(())
+}
+
 /// Open a document with its default application.
 pub fn open_uri(uri: &str) -> Result<(), String> {
     gio::AppInfo::launch_default_for_uri(uri, launch_context().as_ref()).map_err(|e| e.to_string())?;

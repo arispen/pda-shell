@@ -4,6 +4,7 @@ pub mod apps;
 pub mod config;
 pub mod input;
 pub mod keyboard;
+pub mod native;
 pub mod platform;
 pub mod shell;
 pub mod ui;

@@ -115,6 +115,10 @@ impl Page {
 /// Shell-specific commands offered in the command bar for the current view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextAction {
+    /// New document / note (Today).
+    New,
+    /// The menus of the program in front (its own, or generic ones).
+    AppMenus,
     CloseApp,
     CancelMenu,
     /// Leave a shell screen (Programs, Settings, ...).
@@ -229,9 +233,9 @@ impl ShellState {
             return vec![ContextAction::CancelMenu];
         }
         match self.view() {
-            View::Today if self.page == Page::Today => Vec::new(),
+            View::Today if self.page == Page::Today => vec![ContextAction::New],
             View::Today => vec![ContextAction::Ok],
-            View::App(_) => vec![ContextAction::CloseApp],
+            View::App(_) => vec![ContextAction::AppMenus, ContextAction::CloseApp],
         }
     }
 
@@ -404,7 +408,7 @@ mod tests {
     use super::*;
 
     fn win(id: u32, title: &str) -> AppWindow {
-        AppWindow { id: WindowId(id), title: title.into(), app_class: "App".into(), pid: None, fullscreen: false }
+        AppWindow { id: WindowId(id), title: title.into(), app_class: "App".into(), pid: None, fullscreen: false, menus: None }
     }
 
     fn fullscreen(id: u32) -> AppWindow {
@@ -420,7 +424,7 @@ mod tests {
         let s = ShellState::new();
         assert_eq!(s.view(), View::Today);
         assert_eq!(s.title(), "Today");
-        assert!(s.context_actions().is_empty(), "Today needs no extra command");
+        assert_eq!(s.context_actions(), vec![ContextAction::New]);
     }
 
     #[test]
@@ -456,7 +460,7 @@ mod tests {
         s.handle(snap(vec![win(1, "notes.txt - Mousepad")], Some(1), false));
         assert_eq!(s.view(), View::App(WindowId(1)));
         assert_eq!(s.title(), "notes.txt - Mousepad");
-        assert_eq!(s.context_actions(), vec![ContextAction::CloseApp]);
+        assert_eq!(s.context_actions(), vec![ContextAction::AppMenus, ContextAction::CloseApp]);
     }
 
     #[test]
@@ -631,7 +635,7 @@ mod tests {
         let mut s = ShellState::new();
         s.handle(Event::ShowPage(Page::Settings));
         s.handle(snap(vec![win(1, "a")], Some(1), false));
-        assert_eq!(s.context_actions(), vec![ContextAction::CloseApp]);
+        assert_eq!(s.context_actions(), vec![ContextAction::AppMenus, ContextAction::CloseApp]);
         assert!(s.handle(Event::Back).is_empty());
     }
 

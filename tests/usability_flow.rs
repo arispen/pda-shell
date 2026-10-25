@@ -7,7 +7,7 @@ use pda_shell::platform::{AppWindow, WindowId, WindowSnapshot};
 use pda_shell::shell::state::{Effect, Event, ShellState, View};
 
 fn win(id: u32, title: &str, class: &str) -> AppWindow {
-    AppWindow { id: WindowId(id), title: title.into(), app_class: class.into(), pid: Some(id), fullscreen: false }
+    AppWindow { id: WindowId(id), title: title.into(), app_class: class.into(), pid: Some(id), fullscreen: false, menus: None }
 }
 
 fn windows(list: &[&AppWindow], active: Option<u32>, showing_desktop: bool) -> Event {

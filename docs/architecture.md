@@ -31,7 +31,8 @@ for things through standard EWMH messages.
 | `keyboard` | Onboard process, GSettings placement, D-Bus show/hide | GIO | no |
 | `platform` | Neutral types (`WindowId`, `AppWindow`, `WindowSnapshot`, `SurfaceRole`) and the `WindowSystem` trait | no | no |
 | `platform::x11` | EWMH via `x11rb`: roles, struts, activation, window watcher; XSETTINGS manager and `Xft.dpi` for programs (`settings.rs`) | `gtk_glue.rs` only | yes |
-| `ui::*` | Status bar, command bar, Today, Start menu, Programs and Settings screens (hosted in a stack on the Today desktop window), shell icons | yes | no |
+| `ui::*` | Status bar, command bar (program menus over D-Bus, generic commands), Today, Start menu, Programs and Settings screens (hosted in a stack on the Today desktop window), built-in input panel, shell icons | yes | no |
+| `native::*` | First-party programs Files and Notes: separate processes (`src/bin/`) sharing config and stylesheet; their commands are GtkApplication menu bars ([command-bar-api.md](command-bar-api.md)) | yes | no |
 
 All X11 code is below `src/platform/x11/`. The single GTK↔X11 contact point
 is `gtk_glue::xid()`, which returns the X window ID of a realized GTK window.

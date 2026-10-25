@@ -1,0 +1,12 @@
+# pda-shell: system-wide defaults for desktop programs, installed into
+# /etc/dconf/db/local.d/ by scripts/setup-debian.sh. Users can still change
+# every one of them.
+
+# Mousepad: wrap long lines (a 600 px portrait screen otherwise scrolls
+# sideways), and do not ask to restore an old session at start: on a
+# device where the shell ends programs that question is noise.
+[org/xfce/mousepad/preferences/view]
+word-wrap=true
+
+[org/xfce/mousepad/preferences/file]
+session-restore='never'

@@ -11,7 +11,7 @@ rust-version = "1.85"
 gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }
 glib = "0.21"
 gdk4-x11 = { version = "0.10", features = ["v4_4"] }
-x11rb = { version = "0.13", default-features = false }
+x11rb = { version = "0.13", default-features = false, features = ["xtest"] }
 async-channel = "2"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

@@ -8,3 +8,11 @@
 // the 600 px portrait screen. Measured minimum widths: 625 px at 125 %, fits
 // at 115 %. Page text at 115 % is 18 px (1.9 mm on the 5" panel).
 pref("ui.textScaleFactor", 115);
+
+// Compatibility with the shell (issue #4, P1):
+// - no "Privacy Notice" tab on first start; it opened in every new session;
+// - no window buttons in the tab bar: the shell's command bar closes
+//   programs and the window manager keeps windows maximized.
+pref("datareporting.policy.firstRunURL", "");
+pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
+pref("browser.tabs.inTitlebar", 0);
