@@ -1,6 +1,6 @@
 # Known limitations and status
 
-Last updated: 2026-10-24 (POC 0.3: Pocket PC 2003 SE UX, P0 slice of
+Last updated: 2026-10-25 (POC 0.3: Pocket PC 2003 SE UX, P0, P1 and P2 of
 issue #4; POC 0.2 sections below unchanged unless noted). Nothing here has
 been tried on the physical 5" resistive display yet; everything ran in the
 nested X11 session (Xvfb + Openbox, Debian 13 arm64 in the dev container).
@@ -33,8 +33,10 @@ the issue was replayed by the workflow test with synthetic pointer taps; see
 | P0 theme | Blue status bar, silver menu bar, Tahoma, original icons | **demonstrated** |
 | P0 screenshots | Before/after at 600×1024 and 1024×600 | done: [screenshots.md](screenshots.md) |
 | P0 | Assessment on the physical 5" panel | **not done** (no hardware; see below) |
-| P1 | Program-specific commands in the command bar (API for native apps, fallback for X11 windows) | **not started**; the bar keeps Today / Windows / Close / OK / input panel |
-| P2 | Native Files and Notes, integrated input panel (SIP) | **not started**; Thunar, Mousepad and Onboard remain |
+| P1 | Program-specific commands in the command bar: published GtkApplication menu bars ([command-bar-api.md](command-bar-api.md)), generic File/Edit for other X11 programs, New on Today | **automated** (Mousepad saved through its own published File menu, Gnumeric through the generic File > Save, Notes and Files menus), **unit-tested** (menu model, overflow, shortcuts, key mapping) |
+| P1 | Compatibility defaults: Mousepad wraps lines and does not offer session restore; Firefox without the Privacy Notice tab and tab-bar window buttons | **demonstrated**; installed by `setup-debian.sh` (dconf, `/etc/firefox-esr`) |
+| P2 | Native Files and Notes (`pda-files`, `pda-notes`), Thunar and Mousepad under Linux tools | **automated** (New > Note, typing, Done, note on disk, Files lists and navigates, switcher with native and Linux programs, End session closes them) |
+| P2 | Built-in Pocket PC input panel, Onboard kept as the default | **automated** (switch panels, type with Shift/Caps, work area shrinks, focus stays in the program), **unit-tested** (modifiers, layout) |
 
 ### What scaling made worse (reported, not silently accepted)
 
@@ -69,6 +71,30 @@ are computed (Settings → System → Screen shows them live); readability,
 stylus accuracy with 46 px targets and the 1.5× program text must be
 checked on the device before the tokens are final. Record findings in
 [test-results.md](test-results.md).
+
+### P1 / P2 limitations
+
+- The command bar shows a program's own menus only if it publishes a
+  GtkApplication menu bar. Thunar and Gnumeric do not, so they get the
+  generic File/Edit commands; their own menus stay in their windows.
+- Generic commands are keyboard shortcuts: a program that does not use
+  Ctrl+S for Save (rare) does something else or nothing.
+- Mousepad shows its menu bar both in its window and in the command bar.
+  Hiding it in the window is a Mousepad setting the shell does not change.
+- GTK 4's own popover menus expose their items to accessibility without
+  any text; the shell therefore draws command-bar menus itself. Other GTK 4
+  programs' popover menus are affected the same way (GTK issue, not ours).
+- Files: no copy/move between folders, no multiple selection, no search;
+  Rename and Delete are on the long press. Opening documents uses the
+  default programs (Gnumeric, Atril, Mousepad, Firefox).
+- Notes: plain text only (no ink, no formatting), no recording; notes are
+  `.txt` files in `~/Documents/Notes`, titled by their first line.
+- Built-in input panel: one US layout, no word suggestions, no
+  handwriting; non-ASCII characters are typed through a spare keycode
+  (works in X11, not tested with every program). Its keys are 43 px wide
+  in portrait (14 per row on 600 px), below the 46 px target; Onboard
+  remains the default until it is judged on the panel.
+- Neither input panel appears by itself when a text field gets the focus.
 
 ### Smaller POC 0.3 limitations
 
@@ -175,12 +201,14 @@ noted.
 
 ### Stylus interaction
 - **Tooltips appear after taps.** With a stylus the pointer stays where the
-  last tap was, so GTK tooltips pop up over toolbars ("Change font", "Open
-  your personal folder"). The workflow test parks the pointer on the status
-  bar before each screenshot so the screenshots show the screens, not the
-  tooltip; on the device they will appear. GTK 3 has no switch to turn
-  tooltips off; candidates are a theme rule or moving the pointer after a
-  tap in the future touch daemon.
+  last tap was, so tooltips pop up over toolbars ("Go to the home folder").
+  Since POC 0.3 the shell and its native programs set no tooltips at all,
+  and GTK's own tooltips are drawn as a flat light box: without a
+  compositor GTK's translucent tooltip rendered as a black box, blank when
+  it inherited a bar's text colour. GTK 3 programs get the same look from
+  `config/home/.config/gtk-3.0/gtk.css` (session HOME default). Programs'
+  tooltips still appear; GTK 3 has no switch to turn them off. The workflow
+  test parks the pointer on the status bar before each screenshot.
 - The "Exit full screen" button covers 152×24 px of the full-screen
   program's top-right corner while shown.
 - In full screen the keyboard stays on top of the program but the program

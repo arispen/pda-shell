@@ -47,7 +47,7 @@ values. No Microsoft artwork, logos or the Windows flag.
 │ ▣ Open programs …                        │
 │ ★ Favorites   [icon] [icon] [icon] …     │
 ├──────────────────────────────────────────┤
-│ Today │ Windows (2)▴ │ Close        ⌨▴   │  command bar, silver (50 px)
+│ ☀ ▣2▴ │ File▴ Edit▴ Tools▴   ✕ │ ⌨ ▴ │  command bar, silver (50 px)
 └──────────────────────────────────────────┘
 ```
 
@@ -60,7 +60,9 @@ values. No Microsoft artwork, logos or the Windows flag.
 | Today | date, owner, Calendar, Tasks, Messages | date, Calendar / Tasks / Messages (empty states until providers exist), Documents, Open programs, Favorites |
 | Programs | Programs folder, icon grid | icon grid of user programs plus a **Linux tools** folder with technical utilities and settings dialogs |
 | Settings | Personal / System / Connections tabs | the same three groups; System → About (device, OS, kernel, memory), Screen (sizes in mm), Linux settings, End session; Connections → Network |
-| Menu bar | program menus left, SIP button right | Today, running-program switcher, then the current screen's command (Close, OK, Cancel), input panel button at the right |
+| Menu bar | program menus left, SIP button right | Today and switcher icons, then **the program's own menus** (published GtkApplication menu bar) or generic File/Edit commands for other X11 programs, New on Today, OK on shell screens; Close and the input panel button at the right. See [command-bar-api.md](command-bar-api.md) |
+| SIP button and arrow | input panel; arrow chooses Keyboard, Letter Recognizer… | keyboard button shows the input panel; the arrow chooses the **Pocket PC keyboard** (built in) or the **full keyboard** (Onboard, default) |
+| File Explorer, Notes | built-in programs | native **Files** and **Notes** (`pda-files`, `pda-notes`); Thunar and Mousepad stay as advanced Linux tools |
 | "ok" | closes a Settings applet | **OK** in the command bar goes up one level (About → Settings → Today) |
 | Tap-and-hold ring of dots | tap-and-hold | same idea: dots fill in for 600 ms, then the context menu |
 
@@ -83,8 +85,11 @@ every installed program.
 - **OK** goes up one level among the shell screens
   (Linux tools → Programs → Today, About/Screen/Network/Linux settings →
   Settings → Today). It is shown only on those screens.
-- **Close** closes the program in front the normal way (it may ask to
+- **Close** (✕) closes the program in front the normal way (it may ask to
   save). **Windows** switches programs; "Close all" needs a second tap.
+- **New ▴** on Today creates a note, a spreadsheet or a folder.
+- The program's menus are in the command bar whatever program is in front;
+  a program's own menu bar inside its window is optional.
 - **Exit full screen** stays above full-screen programs.
 - **End session** is in the Start menu (last, quieter row) and in
   Settings → System; it closes programs the normal way first.
@@ -96,7 +101,7 @@ every installed program.
 | Tap | left click | shell: GTK default |
 | Double tap | double click | recognizer done, shell uses GTK default |
 | Tap and drag | drag / select | recognizer done; shell lists use scrollbars |
-| Long press (600 ms, cancelled by > 8 px movement) | right click / context menu | shell: done (favorites, Programs, Start rows, documents); system-wide: future |
+| Long press (600 ms, cancelled by > 8 px movement) | right click / context menu | shell and native programs: done (favorites, Programs, Start rows, documents, Files: Rename/Delete, Notes: Delete); system-wide: future |
 
 All thresholds are in `[input]` of the config file.
 
@@ -122,4 +127,11 @@ exceptions: [ergonomics.md](ergonomics.md).
   Settings and `icon_px` in lists and bars; programs keep their own colored
   icons. Symbolic icons only for status (network, battery).
 - **Popovers and menus:** flat, square, 1 px outline; no shadows (there is
-  no compositor) and no animations.
+  no compositor) and no animations. Command bar menus are lists of
+  `target_px` rows with a ✓ column, drawn by the shell.
+- **Native programs:** the same tokens and stylesheet as the shell: header
+  band, lined lists with document icons, no toolbars; questions (new folder
+  name, delete?) appear as a strip above the content instead of dialogs.
+- **Built-in input panel:** five rows (numbers, QWERTY, CAP/Shift, Ctl/Alt
+  and arrows), silver keys with a dark outline, the blue selection for
+  pressed and latched keys.

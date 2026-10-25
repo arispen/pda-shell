@@ -20,9 +20,15 @@ targets) as the default, the same scale applied session-wide to programs
 Programs and Settings screens (system details moved to Settings → About),
 a blue status bar and silver menu bar, Wine's Tahoma clone and an original
 colored icon set. Before/after screenshots:
-[docs/screenshots.md](docs/screenshots.md). Not done yet (P1/P2): the
-app-specific command bar API, native Files/Notes, an integrated input panel,
-and any assessment on the physical panel.
+[docs/screenshots.md](docs/screenshots.md).
+
+P1 and P2: the command bar shows the program's own menus (any
+GtkApplication menu bar, e.g. Mousepad's; see
+[docs/command-bar-api.md](docs/command-bar-api.md)) or generic File/Edit
+commands, and New on Today; native **Files** and **Notes** programs, with
+Thunar and Mousepad under Programs → Linux tools; a built-in Pocket PC
+style input panel next to Onboard. Not done: any assessment on the
+physical panel.
 
 POC 0.2: real desktop programs (Thunar, Gnumeric, Mousepad, Atril, Firefox
 ESR) are edited, saved and reopened **with the pointer and the on-screen
@@ -113,10 +119,14 @@ Programs, Settings, About, Screen, Find, keyboard) in both orientations into
 `config/pda-shell.toml`: every size, colour and input threshold (long-press
 600 ms, 8 px slop, …), density profiles
 (`[density.compact|balanced|readable|pocketpc]`, `pocketpc` selected),
-the programs' DPI and font (`app_dpi`, `app_font`), favorites, keyboard command and layout, Start menu filtering, full-screen
+the programs' DPI and font (`app_dpi`, `app_font`), the input panel
+(`[keyboard] panel`: `onboard` or the built-in `pocketpc`), favorites, keyboard command and layout, Start menu filtering, full-screen
 policy and dialog fitting. Session-local edits of the favorites are saved to
 `$XDG_CONFIG_HOME/pda-shell/today-shortcuts`.
-`config/openbox/rc.xml`: window-manager rules (maximize and undecorate
+`config/share/applications/`: desktop entries of the native programs (the
+session puts `config/share` on `XDG_DATA_DIRS` and the build directory on
+`PATH`). `config/dconf/`, `config/firefox/`: defaults for desktop programs
+installed by `setup-debian.sh`. `config/openbox/rc.xml`: window-manager rules (maximize and undecorate
 ordinary application windows). `config/home/`: defaults copied into a new
 session HOME (file associations, Thunar list view with single-tap open).
 `scripts/bin/pda-onboard`: starts Onboard with a fix for symbol keys on
@@ -128,12 +138,14 @@ Debian 13 (see the script).
 src/
   main.rs, lib.rs, config.rs
   shell/      state machine (state.rs), layout.rs, shortcuts.rs, controller (mod.rs)
-  ui/         status_bar/, command_bar/, today/, start_menu/, programs.rs, settings/,
-              escape.rs, shared widgets + CSS
+  ui/         status_bar/, command_bar/ (menus.rs: program menus), today/, start_menu/,
+              programs.rs, settings/, sip.rs (input panel), escape.rs, shared widgets + CSS
+  native/     first-party programs: files.rs, notes.rs (binaries in src/bin/)
   apps/       desktop entries, search, launching
   input/      gesture recognizer (gesture.rs) + GTK long-press feedback
   keyboard/   Onboard control
-  platform/   neutral window types; x11/ = all X11/EWMH code, XSETTINGS (settings.rs)
+  platform/   neutral window types; x11/ = all X11/EWMH code, XSETTINGS (settings.rs),
+              XTEST typing (keys.rs)
 scripts/      setup-debian.sh, dev-session.sh, smoke-test.sh, app-workflow-test.sh,
               capture-screens.sh, capture-profiles.sh, container.sh,
               make-sample-files.py, bin/pda-onboard, lib/pda_ui.py

@@ -106,6 +106,10 @@ pub struct KeyboardConfig {
     /// Onboard layout: a name from /usr/share/onboard/layouts (e.g. "Small")
     /// or a path to a .onboard file. Empty keeps Onboard's own choice.
     pub layout: String,
+    /// Input panel shown by the keyboard button: "onboard" (full keyboard,
+    /// the default) or "pocketpc" (the shell's built-in Pocket PC style
+    /// panel). The arrow beside the button switches at run time.
+    pub panel: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -213,8 +217,8 @@ impl Default for TodayConfig {
     fn default() -> Self {
         Self {
             shortcuts: vec![
-                "thunar.desktop".into(),
-                "org.xfce.mousepad.desktop".into(),
+                "pda-files.desktop".into(),
+                "pda-notes.desktop".into(),
                 "org.gnumeric.gnumeric.desktop".into(),
                 "atril.desktop".into(),
                 "firefox-esr.desktop".into(),
@@ -227,7 +231,7 @@ impl Default for TodayConfig {
 
 impl Default for KeyboardConfig {
     fn default() -> Self {
-        Self { command: vec!["pda-onboard".into()], layout: "Small".into() }
+        Self { command: vec!["pda-onboard".into()], layout: "Small".into(), panel: "onboard".into() }
     }
 }
 
@@ -242,6 +246,8 @@ impl Default for StartMenuConfig {
                 "thunar-bulk-rename.desktop",
                 "onboard-settings.desktop",
                 "onboard.desktop",
+                "thunar.desktop",
+                "org.xfce.mousepad.desktop",
             ]
             .map(String::from)
             .to_vec(),

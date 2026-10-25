@@ -68,8 +68,8 @@ feedback_delay_ms = 150   # progress ring appears after this much holding
 # Favorites: shown on Today and in the Start menu. Desktop entry IDs;
 # entries that are not installed are skipped.
 shortcuts = [
-    "thunar.desktop",
-    "org.xfce.mousepad.desktop",
+    "pda-files.desktop",
+    "pda-notes.desktop",
     "org.gnumeric.gnumeric.desktop",
     "atril.desktop",
     "firefox-esr.desktop",
@@ -84,6 +84,10 @@ command = ["pda-onboard"]
 # Onboard's "Small" layout has Esc, Tab, Ctrl, Alt and arrow keys on the
 # main layer (the default "Compact" layout has no Esc).
 layout = "Small"
+# Input panel of the keyboard button: "onboard" (above) or "pocketpc", the
+# shell's built-in Pocket PC style keyboard (prototype). The arrow next to
+# the keyboard button switches between them while the shell runs.
+panel = "onboard"
 
 [start_menu]
 # Technical utilities kept out of the program list. They are still found by
@@ -97,6 +101,10 @@ hidden = [
     "thunar-bulk-rename.desktop",
     "onboard-settings.desktop",
     "onboard.desktop",          # the command bar has the keyboard button
+    # The Linux file manager and text editor: advanced alternatives to the
+    # native Files and Notes, listed under Programs > Linux tools.
+    "thunar.desktop",
+    "org.xfce.mousepad.desktop",
 ]
 
 [windows]

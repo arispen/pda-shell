@@ -1,17 +1,23 @@
-//! Bottom command bar, a Pocket PC 2003 style menu bar: text commands on the
-//! left (Today, the running-program switcher, then commands for the current
-//! screen: Close, OK, Cancel) and the input panel (keyboard) button at the
-//! right edge.
+//! Bottom command bar, a Pocket PC 2003 style menu bar. Left: Today and the
+//! running-program switcher (icons), then the commands of what is in front:
+//! the program's own menus when it publishes them (GtkApplication menu bar
+//! over D-Bus: the shell's native programs, Mousepad, ...), otherwise
+//! generic File / Edit commands typed as keyboard shortcuts; New on Today;
+//! OK on shell screens; Cancel while the Start menu is open. Right: Close
+//! for programs, and the input panel button with its chooser.
+
+pub mod menus;
 
 use super::ShellWindow;
 use crate::config::Config;
 use crate::platform::x11::X11;
-use crate::platform::{SurfaceRole, WindowId};
+use crate::platform::{AppMenus, Key, KeyChord, SurfaceRole, WindowId};
 use crate::shell::layout::Layout;
 use crate::shell::state::{ContextAction, Event};
 use crate::shell::{Command, Dispatch};
 use gtk::gio;
 use gtk::prelude::*;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 /// One row of the application switcher.
@@ -40,15 +46,82 @@ pub struct CommandBar {
     switcher_label: gtk::Label,
     switcher_list: gtk::ListBox,
     context: gtk::Box,
+    /// The program's menus (or the generic ones); kept while it is in front.
+    app_menus: gtk::Box,
+    /// Which window's menus `app_menus` shows, and the D-Bus model behind it.
+    shown_menus: RefCell<Option<(WindowId, Option<AppMenus>, Option<menus::Remote>)>>,
+    /// The actions the bar shows now; rebuilt only when they change, so an
+    /// open menu survives title updates.
+    shown_actions: RefCell<Option<Vec<ContextAction>>>,
+    new_menu: gio::Menu,
+    new_actions: gio::SimpleActionGroup,
+    keys: gio::SimpleActionGroup,
+    close: gtk::Button,
     keyboard: gtk::Button,
+    panels: gio::SimpleAction,
     dispatch: Dispatch,
     icon_px: u32,
     target_px: u32,
+    /// Menu buttons that fit between the fixed buttons.
+    max_menus: usize,
+}
+
+/// Generic commands for programs that publish no menus: common keyboard
+/// shortcuts, typed into the program in front.
+pub fn generic_menus() -> Vec<(&'static str, Vec<(&'static str, KeyChord)>)> {
+    vec![
+        (
+            "File",
+            vec![
+                ("Save", KeyChord::ctrl('s')),
+                ("Open…", KeyChord::ctrl('o')),
+                ("Find…", KeyChord::ctrl('f')),
+                ("Program menu", KeyChord::plain(Key::F(10))),
+            ],
+        ),
+        (
+            "Edit",
+            vec![
+                ("Undo", KeyChord::ctrl('z')),
+                ("Cut", KeyChord::ctrl('x')),
+                ("Copy", KeyChord::ctrl('c')),
+                ("Paste", KeyChord::ctrl('v')),
+                ("Select all", KeyChord::ctrl('a')),
+            ],
+        ),
+    ]
+}
+
+fn remote_groups(r: &menus::Remote) -> menus::Groups {
+    let mut g = Vec::new();
+    if let Some(a) = &r.app {
+        g.push(("app".to_string(), a.clone()));
+    }
+    if let Some(w) = &r.window {
+        g.push(("win".to_string(), w.clone()));
+    }
+    menus::Groups(g)
+}
+
+/// How many menu buttons fit beside the fixed ones (Today, Windows, Close,
+/// input panel and its chooser).
+pub fn max_menus(width: u32, target_px: u32, font_px: u32, padding_px: u32) -> usize {
+    let fixed = 5 * target_px + 2 * font_px;
+    let per_menu = font_px * 4 + 2 * padding_px;
+    (width.saturating_sub(fixed) / per_menu.max(1)).max(1) as usize
 }
 
 /// A menu-bar command: text only, like the menus of a Pocket PC program.
 fn bar_button(label: &str) -> gtk::Button {
     let b = gtk::Button::with_label(label);
+    b.update_property(&[gtk::accessible::Property::Label(label)]);
+    b
+}
+
+/// A bar button that is an icon only; `label` is its accessible name.
+fn icon_button(icon: &str, label: &str, px: u32) -> gtk::Button {
+    let b = gtk::Button::new();
+    b.set_child(Some(&super::named_icon(icon, px)));
     b.update_property(&[gtk::accessible::Property::Label(label)]);
     b
 }
@@ -63,24 +136,24 @@ fn arrow() -> gtk::Label {
 impl CommandBar {
     pub fn new(app: &gtk::Application, layout: &Layout, x11: &Rc<X11>, cfg: &Config, dispatch: Dispatch) -> Rc<Self> {
         let px = cfg.design.icon_px;
+        menus::set_max_height(layout.workarea.height);
         let win =
             ShellWindow::new(app, "pda-shell command bar", "bar", SurfaceRole::BottomPanel, layout.bottom_bar, x11, cfg);
         win.window.add_css_class("menu-bar");
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
-        let today = bar_button("Today");
-        today.set_tooltip_text(Some("Show Today"));
+        let today = icon_button("pda-today", "Today", px);
         let d = dispatch.clone();
         today.connect_clicked(move |_| d(Command::Shell(Event::Today)));
 
-        let switcher_label = gtk::Label::new(Some("Windows"));
+        let switcher_label = gtk::Label::new(None);
         let switcher_content = gtk::Box::new(gtk::Orientation::Horizontal, 3);
+        switcher_content.append(&super::named_icon("pda-windows", px));
         switcher_content.append(&switcher_label);
         switcher_content.append(&arrow());
         let switcher = gtk::MenuButton::new();
         switcher.set_child(Some(&switcher_content));
         switcher.set_direction(gtk::ArrowType::Up);
-        switcher.set_tooltip_text(Some("Running programs"));
         let switcher_list = gtk::ListBox::new();
         switcher_list.add_css_class("compact");
         switcher_list.add_css_class("targets");
@@ -130,43 +203,171 @@ impl CommandBar {
             }
         });
 
-        // Commands for the current screen follow the switcher, on the left.
+        // Commands for what is in front follow the switcher, on the left.
         let context = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         context.set_hexpand(true);
         context.set_halign(gtk::Align::Start);
+        let app_menus = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
-        // The input panel button: the keyboard icon with an arrow, at the
-        // right edge like the Pocket PC SIP button.
+        // Generic commands: actions "keys.N" type a shortcut.
+        let keys = gio::SimpleActionGroup::new();
+        for (i, chord) in generic_menus().into_iter().flat_map(|(_, items)| items).map(|(_, c)| c).enumerate() {
+            let a = gio::SimpleAction::new(&format!("k{i}"), None);
+            let d = dispatch.clone();
+            a.connect_activate(move |_, _| d(Command::SendKey(chord)));
+            keys.add_action(&a);
+        }
+        app_menus.insert_action_group("keys", Some(&keys));
+        let new_actions = gio::SimpleActionGroup::new();
+        context.insert_action_group("new", Some(&new_actions));
+
+        let close = icon_button("pda-close", "Close", px);
+        close.set_visible(false);
+        let d = dispatch.clone();
+        close.connect_clicked(move |_| d(Command::Shell(Event::CloseActive)));
+
+        // The input panel button: the keyboard icon at the right edge like
+        // the Pocket PC SIP button, and the arrow beside it to choose the
+        // input panel.
         let keyboard = gtk::Button::new();
         keyboard.add_css_class("sip");
-        let sip = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        sip.append(&super::named_icon("pda-keyboard", (cfg.design.bottom_bar_px * 2 / 3).max(px)));
-        sip.append(&arrow());
-        keyboard.set_child(Some(&sip));
-        keyboard.set_tooltip_text(Some("Show or hide the keyboard"));
+        keyboard.set_child(Some(&super::named_icon("pda-keyboard", (cfg.design.bottom_bar_px * 2 / 3).max(px))));
         keyboard.update_property(&[gtk::accessible::Property::Label("Input panel (keyboard)")]);
         let d = dispatch.clone();
         keyboard.connect_clicked(move |_| d(Command::Shell(Event::ToggleKeyboard)));
 
+        let panels = gio::SimpleAction::new_stateful("panel", Some(glib::VariantTy::STRING), &"".to_variant());
+        let d = dispatch.clone();
+        panels.connect_change_state(move |a, value| {
+            if let Some(name) = value.and_then(|v| v.get::<String>()) {
+                a.set_state(&name.to_variant());
+                d(Command::SetInputPanel(name));
+            }
+        });
+        let sip_actions = gio::SimpleActionGroup::new();
+        sip_actions.add_action(&panels);
+        let chooser_menu = gio::Menu::new();
+        for (label, name) in crate::keyboard::PANELS {
+            let item = gio::MenuItem::new(Some(label), None);
+            item.set_action_and_target_value(Some("sip.panel"), Some(&name.to_variant()));
+            chooser_menu.append_item(&item);
+        }
+        let chooser = gtk::MenuButton::new();
+        chooser.set_child(Some(&arrow()));
+        chooser.add_css_class("sip-chooser");
+        chooser.set_direction(gtk::ArrowType::Up);
+        chooser.update_property(&[gtk::accessible::Property::Label("Input panel choice")]);
+        chooser.insert_action_group("sip", Some(&sip_actions));
+        let sip_groups = menus::Groups(vec![("sip".into(), sip_actions.clone().upcast())]);
+        menus::attach_menu(&chooser, &chooser_menu.clone().upcast(), &sip_groups);
+
         row.append(&today);
-        row.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         row.append(&switcher);
+        row.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         row.append(&context);
+        row.append(&close);
         row.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         row.append(&keyboard);
+        row.append(&chooser);
         win.set_content(&row);
 
+        let d = &cfg.design;
         Rc::new(Self {
             win,
             switcher,
             switcher_label,
             switcher_list,
             context,
+            app_menus,
+            shown_menus: RefCell::new(None),
+            shown_actions: RefCell::new(None),
+            new_menu: gio::Menu::new(),
+            new_actions,
+            keys,
+            close,
             keyboard,
+            panels,
             dispatch,
             icon_px: px,
-            target_px: cfg.design.target_px,
+            target_px: d.target_px,
+            max_menus: max_menus(layout.screen.width, d.target_px, d.font_px, d.padding_px),
         })
+    }
+
+    /// Items of the New menu on Today (label, command).
+    pub fn set_new_items(&self, items: Vec<(String, Command)>) {
+        self.new_menu.remove_all();
+        for name in self.new_actions.list_actions() {
+            self.new_actions.remove_action(&name);
+        }
+        // The New button is built from the menu when shown.
+        self.shown_actions.borrow_mut().take();
+        for (i, (label, cmd)) in items.into_iter().enumerate() {
+            let a = gio::SimpleAction::new(&format!("n{i}"), None);
+            let d = self.dispatch.clone();
+            a.connect_activate(move |_, _| d(cmd.clone()));
+            self.new_actions.add_action(&a);
+            self.new_menu.append(Some(&label), Some(&format!("new.n{i}")));
+        }
+    }
+
+    /// The input panel the chooser shows as selected.
+    pub fn set_input_panel(&self, name: &str) {
+        self.panels.set_state(&name.to_variant());
+    }
+
+    /// Show the menus of the program in front: its published menu bar, or
+    /// the generic commands.
+    pub fn set_app(self: &Rc<Self>, id: WindowId, published: Option<&AppMenus>) {
+        if let Some((shown, menus, _)) = &*self.shown_menus.borrow() {
+            if *shown == id && menus.as_ref() == published {
+                return;
+            }
+        }
+        for g in ["app", "win"] {
+            self.app_menus.insert_action_group(g, None::<&gio::ActionGroup>);
+        }
+        let remote = published.and_then(|m| match menus::remote(m) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                log::warn!("cannot read the menus of {}: {e}", m.bus_name);
+                None
+            }
+        });
+        match &remote {
+            Some(r) => {
+                self.app_menus.insert_action_group("app", r.app.as_ref());
+                self.app_menus.insert_action_group("win", r.window.as_ref());
+                let bar = Rc::downgrade(self);
+                // The model fills in asynchronously, and changes with the
+                // program's state.
+                let groups = remote_groups(r);
+                let g = groups.clone();
+                r.model.connect_items_changed(move |model, _, _, _| {
+                    if let Some(bar) = bar.upgrade() {
+                        menus::fill(&bar.app_menus, &menus::entries(model), bar.max_menus, &g);
+                    }
+                });
+                menus::fill(&self.app_menus, &menus::entries(&r.model), self.max_menus, &groups);
+            }
+            None => {
+                let mut k = 0;
+                let entries: Vec<menus::Entry> = generic_menus()
+                    .into_iter()
+                    .map(|(label, items)| {
+                        let m = gio::Menu::new();
+                        for (item, _) in items {
+                            m.append(Some(item), Some(&format!("keys.k{k}")));
+                            k += 1;
+                        }
+                        menus::Entry { label: label.into(), submenu: Some(m.upcast()), action: None }
+                    })
+                    .collect();
+                let groups = menus::Groups(vec![("keys".into(), self.keys.clone().upcast())]);
+                menus::fill(&self.app_menus, &entries, self.max_menus, &groups);
+            }
+        }
+        *self.shown_menus.borrow_mut() = Some((id, published.cloned(), remote));
     }
 
     pub fn set_windows(&self, entries: Vec<SwitcherEntry>) {
@@ -175,7 +376,10 @@ impl CommandBar {
             n => format!("Windows ({n})"),
         };
         self.switcher.update_property(&[gtk::accessible::Property::Label(&label)]);
-        self.switcher_label.set_text(&label);
+        self.switcher_label.set_text(&match entries.len() {
+            0 => String::new(),
+            n => n.to_string(),
+        });
         self.switcher.set_sensitive(!entries.is_empty());
         self.switcher_list.remove_all();
         let count = entries.len();
@@ -200,16 +404,38 @@ impl CommandBar {
     }
 
     pub fn set_context_actions(&self, actions: &[ContextAction]) {
+        if self.shown_actions.borrow().as_deref() == Some(actions) {
+            return;
+        }
+        *self.shown_actions.borrow_mut() = Some(actions.to_vec());
         while let Some(c) = self.context.first_child() {
             self.context.remove(&c);
         }
+        self.close.set_visible(actions.contains(&ContextAction::CloseApp));
         for a in actions {
             let (label, cmd) = match a {
-                ContextAction::CloseApp => ("Close", Command::Shell(Event::CloseActive)),
+                ContextAction::CloseApp => continue,
+                ContextAction::AppMenus => {
+                    self.context.append(&self.app_menus);
+                    continue;
+                }
+                ContextAction::New => {
+                    if self.new_menu.n_items() > 0 {
+                        let entry = menus::Entry {
+                            label: "New".into(),
+                            submenu: Some(self.new_menu.clone().upcast()),
+                            action: None,
+                        };
+                        let holder = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                        let groups = menus::Groups(vec![("new".into(), self.new_actions.clone().upcast())]);
+                        menus::fill(&holder, &[entry], 1, &groups);
+                        self.context.append(&holder);
+                    }
+                    continue;
+                }
                 ContextAction::CancelMenu => ("Cancel", Command::Shell(Event::DismissStartMenu)),
                 ContextAction::Ok => ("OK", Command::Shell(Event::Back)),
             };
-            self.context.append(&gtk::Separator::new(gtk::Orientation::Vertical));
             let b = bar_button(label);
             let d = self.dispatch.clone();
             b.connect_clicked(move |_| d(cmd.clone()));
@@ -263,6 +489,23 @@ pub fn switcher_row(e: &SwitcherEntry, icon_px: u32) -> gtk::ListBoxRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menus_that_fit_the_bar() {
+        // pocketpc tokens: 46 px targets, 22 px text, 8 px padding.
+        assert_eq!(max_menus(600, 46, 22, 8), 3);
+        assert!(max_menus(1024, 46, 22, 8) >= 6);
+        assert_eq!(max_menus(100, 46, 22, 8), 1, "always at least one");
+    }
+
+    #[test]
+    fn generic_commands_are_common_shortcuts() {
+        let all: Vec<(&str, KeyChord)> = generic_menus().into_iter().flat_map(|(_, i)| i).collect();
+        let get = |n: &str| all.iter().find(|(l, _)| *l == n).map(|(_, c)| *c).unwrap();
+        assert_eq!(get("Save"), KeyChord::ctrl('s'));
+        assert_eq!(get("Paste"), KeyChord::ctrl('v'));
+        assert_eq!(get("Program menu").key, Key::F(10));
+    }
 
     #[test]
     fn close_all_needs_confirmation_text() {

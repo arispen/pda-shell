@@ -35,7 +35,7 @@ SESSION_PKGS=(
     xserver-xephyr xvfb openbox
     x11-utils x11-xserver-utils x11-apps xdotool wmctrl
     imagemagick dbus-x11 dbus-user-session at-spi2-core
-    adwaita-icon-theme fonts-dejavu-core fonts-wine librsvg2-common
+    adwaita-icon-theme fonts-dejavu-core fonts-wine librsvg2-common dconf-cli
     desktop-file-utils shared-mime-info xdg-utils
     onboard gir1.2-atspi-2.0
 )
@@ -57,6 +57,14 @@ $SUDO apt-get install -y --no-install-recommends "${PKGS[@]}"
 $SUDO mkdir -p /usr/local/share/fonts/pda-shell
 $SUDO ln -sf /usr/share/wine/fonts/tahoma.ttf /usr/share/wine/fonts/tahomabd.ttf /usr/local/share/fonts/pda-shell/
 $SUDO fc-cache -f /usr/local/share/fonts/pda-shell >/dev/null
+
+# Defaults for desktop programs (Mousepad), see the file.
+$SUDO mkdir -p /etc/dconf/profile /etc/dconf/db/local.d
+if [ ! -e /etc/dconf/profile/user ]; then
+    printf 'user-db:user\nsystem-db:local\n' | $SUDO tee /etc/dconf/profile/user >/dev/null
+fi
+$SUDO install -m 644 "$(dirname "$0")/../config/dconf/pda-shell" /etc/dconf/db/local.d/50-pda-shell
+$SUDO dconf update
 
 # Firefox scaling exception (see the file); only when Firefox is installed.
 if [ -d /etc/firefox-esr ]; then

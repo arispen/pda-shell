@@ -37,7 +37,7 @@ import time
 TAP_DELAY = float(os.environ.get("PDA_TAP_DELAY", "0.12"))
 # GTK 4 on X11 reports positions relative to the toplevel window only; the
 # window's own position comes from the X server.
-GTK4_APPS = {"pda-shell"}
+GTK4_APPS = {"pda-shell", "pda-files", "pda-notes"}
 
 
 def xdotool(*args):
@@ -77,6 +77,24 @@ def window_origin(title):
         return None
 
 
+def shown_name(o, depth=0):
+    """The accessible name, or the text of the first label inside (GTK 4
+    popover-menu items have no name of their own)."""
+    name = o.get_name() or ""
+    if name or depth > 3:
+        return name
+    for i in range(o.get_child_count()):
+        c = o.get_child_at_index(i)
+        if c is None:
+            continue
+        if c.get_role_name() == "label" and c.get_name():
+            return c.get_name()
+        inner = shown_name(c, depth + 1)
+        if inner:
+            return inner
+    return ""
+
+
 def find_all(app_name, role, name_re, limit=1, frame_re=None, objects=False):
     Atspi = atspi()
     rx = re.compile(name_re)
@@ -90,7 +108,7 @@ def find_all(app_name, role, name_re, limit=1, frame_re=None, objects=False):
             r = o.get_role_name()
             if r in ("frame", "dialog", "alert", "file chooser", "window"):
                 frame = o.get_name()
-            if r == role and rx.search(o.get_name() or "") and (not frame_re or re.search(frame_re, frame)):
+            if r == role and rx.search(shown_name(o)) and (not frame_re or re.search(frame_re, frame)):
                 # Some roots (GTK 4) have no extents; keep looking below.
                 try:
                     states = o.get_state_set()

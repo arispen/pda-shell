@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+GenericName=File Explorer
+Comment=Browse, open, rename and delete files
+Exec=pda-files %U
+Icon=pda-app-files
+Terminal=false
+Categories=Utility;FileManager;
+MimeType=inode/directory;
+Keywords=folder;explorer;documents;
+StartupWMClass=pda-files
+Actions=new-folder;
+
+[Desktop Action new-folder]
+Name=New folder
+Exec=pda-files --new-folder

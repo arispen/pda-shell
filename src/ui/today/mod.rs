@@ -84,7 +84,7 @@ fn list() -> gtk::ListBox {
 }
 
 /// Icon for a document: one of the shell's document icons by content type.
-fn document_icon(content_type: &str) -> &'static str {
+pub fn document_icon(content_type: &str) -> &'static str {
     let t = content_type.to_lowercase();
     if t.contains("spreadsheet") || t.contains("excel") || t.contains("csv") {
         "pda-doc-spreadsheet"
@@ -363,7 +363,7 @@ impl Today {
             text.append(&sub);
             b.append(&text);
             row.set_child(Some(&b));
-            row.set_tooltip_text(Some(&doc.path.display().to_string()));
+            row.update_property(&[gtk::accessible::Property::Description(&doc.path.display().to_string())]);
             row.update_property(&[gtk::accessible::Property::Label(&name)]);
 
             let dsp = self.dispatch.clone();

@@ -17,6 +17,9 @@ use std::process::{Child, Command};
 use std::rc::Rc;
 use std::time::Duration;
 
+/// The input panels the keyboard button can show: (menu label, config name).
+pub const PANELS: [(&str, &str); 2] = [("Pocket PC keyboard", "pocketpc"), ("Full keyboard (Onboard)", "onboard")];
+
 const BUS_NAME: &str = "org.onboard.Onboard";
 const OBJECT_PATH: &str = "/org/onboard/Onboard/Keyboard";
 const INTERFACE: &str = "org.onboard.Onboard.Keyboard";

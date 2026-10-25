@@ -4,6 +4,7 @@ FROM debian:trixie
 
 COPY scripts/setup-debian.sh /tmp/pda/scripts/setup-debian.sh
 COPY config/firefox /tmp/pda/config/firefox
+COPY config/dconf /tmp/pda/config/dconf
 RUN /tmp/pda/scripts/setup-debian.sh \
     && apt-get install -y --no-install-recommends x11vnc locales \
     && sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen \

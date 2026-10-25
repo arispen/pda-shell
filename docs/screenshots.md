@@ -64,6 +64,27 @@ New shell screens (POC 0.3), both orientations:
 | Mousepad with the keyboard | [09](../screenshots/pocketpc/shell-portrait-09-mousepad-keyboard.png) | [09](../screenshots/pocketpc/shell-landscape-09-mousepad-keyboard.png) |
 | Today with a program open | [10](../screenshots/pocketpc/shell-portrait-10-today-with-program.png) | [10](../screenshots/pocketpc/shell-landscape-10-today-with-program.png) |
 
+P1 and P2 (command bar, native programs, built-in input panel):
+
+| What | Portrait 600×1024 | Landscape 1024×600 |
+|---|---|---|
+| Mousepad's own Edit menu in the command bar (published menu bar) | [11](../screenshots/pocketpc/shell-portrait-11-mousepad-own-edit-menu.png) | [11](../screenshots/pocketpc/shell-landscape-11-mousepad-own-edit-menu.png) |
+| New menu on Today | [12](../screenshots/pocketpc/shell-portrait-12-today-new-menu.png) | [12](../screenshots/pocketpc/shell-landscape-12-today-new-menu.png) |
+| Gnumeric: generic Edit commands (no published menus) | [13](../screenshots/pocketpc/shell-portrait-13-gnumeric-generic-edit-menu.png) | [13](../screenshots/pocketpc/shell-landscape-13-gnumeric-generic-edit-menu.png) |
+| Input panel chooser | [14](../screenshots/pocketpc/shell-portrait-14-input-panel-chooser.png) | [14](../screenshots/pocketpc/shell-landscape-14-input-panel-chooser.png) |
+| Notes typed with the built-in Pocket PC keyboard | [15](../screenshots/pocketpc/shell-portrait-15-notes-builtin-panel.png) | [15](../screenshots/pocketpc/shell-landscape-15-notes-builtin-panel.png) |
+| Notes list | [16](../screenshots/pocketpc/shell-portrait-16-notes-list.png) | [16](../screenshots/pocketpc/shell-landscape-16-notes-list.png) |
+| Files | [17](../screenshots/pocketpc/shell-portrait-17-files.png) | [17](../screenshots/pocketpc/shell-landscape-17-files.png) |
+| Files' View menu (toggle and choice with ✓) | [18](../screenshots/pocketpc/shell-portrait-18-files-view-menu.png) | [18](../screenshots/pocketpc/shell-landscape-18-files-view-menu.png) |
+| Switcher with native and Linux programs | [19](../screenshots/pocketpc/shell-portrait-19-switcher-native-and-linux.png) | [19](../screenshots/pocketpc/shell-landscape-19-switcher-native-and-linux.png) |
+
+| Notes + built-in keyboard | Mousepad's menus in the bar | Files |
+|---|---|---|
+| ![](../screenshots/pocketpc/shell-portrait-15-notes-builtin-panel.png) | ![](../screenshots/pocketpc/shell-portrait-11-mousepad-own-edit-menu.png) | ![](../screenshots/pocketpc/shell-portrait-17-files.png) |
+
+The workflow test adds `16-notes-builtin-panel`, `17-notes-edit-menu` and
+`18-files-notes-folder` to its own series.
+
 The whole POC 0.2 workflow with real programs, in the `pocketpc` profile,
 is in `screenshots/pocketpc/{portrait,landscape}-NN-*.png` with the same
 numbering as the table below.

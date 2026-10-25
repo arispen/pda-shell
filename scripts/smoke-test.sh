@@ -145,6 +145,8 @@ run_orientation() {
     check "Thunar launched from search" wait_long has_class Thunar
     check "Thunar is active" wait_for is_active_class Thunar
     shot thunar
+    # Thunar publishes no menus: the command bar offers generic ones.
+    check "command bar shows generic Edit for Thunar" wait_for found_shell button "^Edit$" --frame "command bar"
     check "status bar stays above applications (bar still at top)" [ "$(geom "$top")" = "0,0,$W,$TOP" ]
 
     # --- Programs and Settings are shell screens on the desktop surface
@@ -179,9 +181,9 @@ run_orientation() {
     sleep 0.3
     shot today-with-apps
 
-    # --- long press on the first Today shortcut (Thunar)
+    # --- long press on the first Today favorite (Files)
     local sx sy sw sh
-    read -r sx sy sw sh <<< "$(ui find pda-shell button "^Thunar" --frame "^Today$")"
+    read -r sx sy sw sh <<< "$(ui find pda-shell button "^Files$" --frame "^Today$")"
     sx=$((sx + sw / 2)); sy=$((sy + sh / 2))
     xdotool mousemove $sx $sy; sleep 0.15; xdotool mousedown 1; sleep 0.4
     shot long-press-progress
@@ -189,8 +191,8 @@ run_orientation() {
     xdotool mouseup 1
     check "long press opens a context menu" wait_for has_popup
     shot long-press-menu
-    local launches; launches="$(grep -c 'launched thunar.desktop' "$LOG_DIR/shell.log")"
-    check "long press did not also launch the shortcut (thunar launches: $launches)" [ "$launches" = 1 ]
+    local launches; launches="$(grep -c 'launched pda-files.desktop' "$LOG_DIR/shell.log")"
+    check "long press did not also launch the favorite (Files launches: $launches)" [ "$launches" = 0 ]
     tap $((W - 40)) $((H / 2))
     check "tapping elsewhere closes the context menu" wait_for no_popup
 

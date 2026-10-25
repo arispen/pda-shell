@@ -7,10 +7,12 @@
 # events are sent. AT-SPI is used to *find* widgets and read results, and
 # saved files are checked on disk.
 #
-# The flow (issue #1, Milestone 7): Today -> Thunar -> find the XLSX ->
+# The flow (issue #1, Milestone 7): Today -> Thunar (Programs > Linux
+# tools since POC 0.3) -> find the XLSX ->
 # Gnumeric edit/save -> Mousepad edit/save -> switcher -> back to Gnumeric ->
 # Atril PDF -> Firefox page and form -> full screen and back -> Today, then
-# reopen both documents, context menus near the edges, and End session with
+# reopen both documents, context menus near the edges, the native Notes and
+# Files with the built-in input panel (POC 0.3, P2), and End session with
 # unsaved work (which must not be discarded silently).
 #
 #   ./scripts/app-workflow-test.sh                         # both orientations
@@ -61,6 +63,10 @@ wait_long() { wait_n 300 "$@"; }
 ui() { python3 "$REPO/scripts/lib/pda_ui.py" "$@" 2>/dev/null; }
 osk() { python3 "$REPO/scripts/lib/pda_ui.py" osk-type "$1" 2>/dev/null; }
 bar() { ui tap pda-shell button "$1" --frame "command bar" --timeout 15 >/dev/null || note "could not find $1 in the command bar"; }
+# A row of a menu opened from the command bar.
+bar_item() { ui tap pda-shell "list item" "$1" --frame "command bar" --timeout 5 >/dev/null || note "no menu row $1"; }
+# A key of the built-in input panel (labels follow Shift).
+sip() { local k; for k in "$@"; do ui tap pda-shell button "^($k|${k^^})\$" --frame "^Input panel$" --timeout 3 >/dev/null || note "no key $k"; done; }
 tap() { xdotool mousemove "$1" "$2"; sleep 0.1; xdotool click 1; sleep 0.2; }
 
 active() { xprop -root _NET_ACTIVE_WINDOW 2>/dev/null | sed -n 's/.*window id # //p'; }
@@ -92,7 +98,10 @@ shot() { xdotool mousemove $((W / 2)) $((TOP / 2)); sleep 0.4; import -window ro
 shell_popup() {
     local w
     for w in $(xdotool search --onlyvisible --pid "$SHELL_PID" 2>/dev/null); do
-        xwininfo -id "$w" 2>/dev/null | grep -q 'Override Redirect State: yes' && [ "$(xprop -id "$w" WM_NAME 2>/dev/null)" != 'WM_NAME(STRING) = "Exit full screen"' ] && { echo "$w"; return 0; }
+        xwininfo -id "$w" 2>/dev/null | grep -q 'Override Redirect State: yes' || continue
+        # The full-screen escape and the input panel are not popups.
+        case "$(xprop -id "$w" WM_NAME 2>/dev/null)" in *'"Exit full screen"'|*'"Input panel"') continue ;; esac
+        echo "$w"; return 0
     done
     return 1
 }
@@ -148,12 +157,16 @@ run_orientation() {
 
     # --- Today -------------------------------------------------------------
     check "Today lists the sample spreadsheet" wait_for found pda-shell "list item" "^Budget 2026.xlsx$" --frame "^Today$"
-    check "Today has program shortcuts" found pda-shell button "^Thunar" --frame "^Today$"
+    check "Today has favorites (native Files)" found pda-shell button "^Files$" --frame "^Today$"
     shot 01-today
 
     # --- Thunar: find the spreadsheet ---------------------------------------
-    ui tap pda-shell button "^Thunar" --frame "^Today$" >/dev/null
-    check "Thunar opens from the Today shortcut" wait_long has_class Thunar
+    # The Linux file manager is an advanced program now: Programs > Linux tools.
+    ui tap pda-shell button "^Start$" --frame "status bar" >/dev/null; sleep 0.8
+    ui tap pda-shell "list item" "^Programs$" --frame "^Start$" >/dev/null; sleep 0.8
+    ui tap pda-shell button "^Linux tools$" --frame "^Today$" --timeout 5 >/dev/null; sleep 0.8
+    ui tap pda-shell button "^Thunar" --frame "^Today$" --timeout 5 >/dev/null
+    check "Thunar opens from Programs > Linux tools" wait_long has_class Thunar
     check "Thunar fills the work area" wait_for fills_workarea Thunar
     ui tap thunar "table cell" "^Documents$" --timeout 10 >/dev/null
     check "Documents folder opens with one tap" wait_n 100 found thunar "table cell" "^Budget 2026.xlsx$"
@@ -188,8 +201,12 @@ run_orientation() {
     # Esc abandons an entry; arrow keys move between cells (now A20 -> B18).
     osk "discard me{Esc}{Up}{Up}{Right}5{Return}"
     shot 05-gnumeric-keyboard
-    ui tap gnumeric button "^Save$" >/dev/null
-    check "Gnumeric saved (title without *)" wait_for active_title_matches "^Budget 2026.xlsx"
+    # Gnumeric publishes no menus: the command bar offers generic commands,
+    # typed as shortcuts (File > Save is Ctrl+S).
+    check "command bar shows generic menus for Gnumeric" found pda-shell button "^Edit$" --frame "command bar"
+    bar "^File$"; sleep 0.5
+    bar_item "^Save$"
+    check "Gnumeric saved from the command bar (title without *)" wait_for active_title_matches "^Budget 2026.xlsx"
     sleep 1
     check "saved file: B2 = 4321.5" [ "$(csv_cell "$docs/Budget 2026.xlsx" 2 2)" = "4321.5" ]
     check "saved file: formula =SUM(B2:B13)*2 = 104643" [ "$(csv_cell "$docs/Budget 2026.xlsx" 18 1)" = "104643" ]
@@ -230,10 +247,17 @@ run_orientation() {
     check "Mousepad resized above the keyboard" wait_for fills_workarea Mousepad
     osk "{Return}Edited on the PDA: 3 * 4 = 12 (ok); path ~/Documents/notes.txt"
     shot 07-mousepad-keyboard
-    ui tap mousepad menu "^File$" >/dev/null; sleep 0.5
-    # Mousepad's menu item names end in padding ("Save      ").
-    ui tap mousepad "menu item" "^Save\\s*$" --timeout 3 >/dev/null
-    check "Mousepad saved (title without *)" wait_for active_title_matches "^~/Documents/notes.txt"
+    # Mousepad publishes its menu bar (GtkApplication): the command bar shows
+    # Mousepad's own menus, and Save runs Mousepad's own action over D-Bus.
+    # Mousepad has six menus; what does not fit (portrait: 3 places) is under More.
+    if [ "$ORIENT" = portrait ]; then
+        check "command bar shows Mousepad's own menus (File ... More)" found pda-shell button "^More$" --frame "command bar"
+    else
+        check "command bar shows Mousepad's own Search menu" found pda-shell button "^Search$" --frame "command bar"
+    fi
+    bar "^File$"; sleep 0.8
+    bar_item "^Save$"
+    check "Mousepad saved through its published menu (title without *)" wait_for active_title_matches "^~/Documents/notes.txt"
     check "saved file contains the typed line" grep -qF "Edited on the PDA: 3 * 4 = 12 (ok); path ~/Documents/notes.txt" "$docs/notes.txt"
     bar "keyboard"
     sleep 0.5
@@ -328,7 +352,7 @@ run_orientation() {
     # --- context menus near the screen edges ----------------------------------
     bar "^Today$"; wait_for showing_desktop 1
     local pos x y w h
-    for target in "list item:^notes.txt$" "button:^Xfce Terminal$" "button:^Thunar"; do
+    for target in "list item:^notes.txt$" "button:^Xfce Terminal$" "button:^Files$"; do
         pos="$(ui find pda-shell "${target%%:*}" "${target#*:}" --frame "^Today$")" || { fail "find $target"; continue; }
         read -r x y w h <<< "$pos"
         # Press near the element's outer edge (left / right side). A fifth
@@ -343,6 +367,47 @@ run_orientation() {
         tap $((W / 2)) $((TOP / 2)); wait_for no_popup
     done
 
+    # --- native Notes and Files, built-in input panel (POC 0.3, P2) ----------
+    bar "^Today$"; wait_for showing_desktop 1
+    bar "^New$"; sleep 0.5
+    bar_item "^Note$"
+    check "New > Note opens Notes" wait_long has_class pda-notes
+    check "Notes fills the work area" wait_for fills_workarea pda-notes
+    check "command bar shows Notes' own menus (Done)" wait_n 50 found pda-shell button "^Done$" --frame "command bar"
+    bar "Input panel choice"; sleep 0.5
+    bar_item "^Pocket PC keyboard$"
+    bar "keyboard"
+    check "built-in input panel appears" wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
+    sleep 0.5
+    local kb_wa2; kb_wa2="$(workarea)"
+    check "work area shrinks above the built-in panel" [ "$kb_wa2" != "$full_wa" ]
+    check "Notes resized above the built-in panel" wait_for fills_workarea pda-notes
+    sip CAP p d a CAP space n o t e Shift '1|!'
+    check "focus stayed in Notes while typing" is_active_class pda-notes
+    shot 16-notes-builtin-panel
+    bar "^Edit$"; sleep 0.5
+    shot 17-notes-edit-menu
+    tap $((W / 2)) $((TOP + 100)); wait_for no_popup
+    bar "keyboard"
+    bar "^Done$"
+    check "Done shows the list of notes" wait_n 50 found pda-notes "list item" "^PDA note!$"
+    check "note written to ~/Documents/Notes" bash -c "grep -qx 'PDA note!' '$docs'/Notes/*.txt"
+    bar "Input panel choice"; sleep 0.5
+    bar_item "^Full keyboard"
+    bar "^Today$"; wait_for showing_desktop 1
+    ui tap pda-shell button "^Files$" --frame "^Today$" >/dev/null
+    check "Files opens from Today" wait_long has_class pda-files
+    check "command bar shows Files' menus" wait_n 50 found pda-shell button "^Go$" --frame "command bar"
+    ui tap pda-files "list item" "^Notes$" --timeout 5 >/dev/null
+    check "Files shows the note in Documents/Notes" wait_n 50 found pda-files "list item" "^Note .*\.txt$"
+    shot 18-files-notes-folder
+    ui tap pda-files button "^Up$" >/dev/null
+    check "Up returns to Documents" wait_n 50 found pda-files "list item" "^Budget 2026.xlsx$"
+    bar "^Windows"; wait_for has_popup
+    check "native and Linux programs share the switcher" found pda-shell "list item" "Notes" --frame "command bar"
+    ui tap pda-shell "list item" "Notes" --frame "command bar" >/dev/null
+    check "switcher brings Notes back" wait_for is_active_class pda-notes
+
     # --- unsaved work is never discarded silently ------------------------------
     bar "^Windows"; wait_for has_popup
     ui tap pda-shell "list item" "notes.txt" --frame "command bar" >/dev/null
@@ -355,6 +420,7 @@ run_orientation() {
     sleep 0.5
     ui tap pda-shell "list item" "^End session$" --frame "^Start$" >/dev/null
     check "Mousepad asks before discarding unsaved changes" wait_n 100 found mousepad button "^Don't Save$"
+    check "Notes and Files closed without asking (Notes saves by itself)" wait_n 100 bash -c "! xdotool search --classname 'pda-(notes|files)' >/dev/null 2>&1"
     check "session is still running while the question is open" kill -0 "$session"
     shot 15-end-session-unsaved
     ui tap mousepad button "^Don't Save$" >/dev/null

@@ -1,3 +1,54 @@
+# POC 0.3 P1 / P2 test results
+
+Date: 2026-10-25. Same environment as below; the container image adds
+`dconf-cli` and the program defaults (`config/dconf`, `config/firefox`).
+
+| Test | Command | Result |
+|---|---|---|
+| Unit and integration tests | `cargo test` | 115 + 1 passed |
+| Shell smoke test, both orientations | `./scripts/smoke-test.sh` | 68 passed, 0 failed |
+| Workflow test, both orientations | `./scripts/app-workflow-test.sh --screenshots screenshots/pocketpc` | 166 passed, 0 failed |
+| Captures | `./scripts/capture-screens.sh` | 19 screens per orientation |
+
+What the workflow test now also checks, pointer only:
+
+- Gnumeric (no published menus) saved through the command bar's generic
+  **File › Save** (Ctrl+S); the saved values are checked on disk.
+- Mousepad's own menus in the command bar (published menu bar; under
+  **More** in portrait) and Mousepad saved through **its own File › Save**
+  action over D-Bus; the file is checked on disk.
+- Today **New › Note** opens Notes; Notes' own menus (Done, Edit) in the
+  bar; switching to the built-in **Pocket PC keyboard** with the chooser;
+  typing "PDA note!" with Caps and Shift; the work area shrinks and focus
+  stays in Notes; **Done** lists the note; the file is on disk.
+- **Files** opens from the favorites, shows its menus, lists the note in
+  Documents/Notes, **Up** returns; the switcher lists native and Linux
+  programs together; End session closes Notes and Files without asking
+  while Mousepad still asks about unsaved text.
+- Thunar is opened from **Programs › Linux tools**.
+
+Found and fixed while testing:
+
+- GTK 4 popover menus expose their items without any accessible text →
+  command-bar menus are drawn by the shell as lists (also better targets).
+- A program's menus load over D-Bus piece by piece (submenus, sections) →
+  open menus re-render as parts arrive.
+- Mousepad pads menu labels ("Save      ") → labels are trimmed.
+- Mousepad's 14-row File menu did not fit landscape (502 px) → menus
+  scroll and are capped at the space between the bars.
+- The built-in panel re-raised itself over open menus → it is raised only
+  when the window list changes.
+- After a command-bar menu the keyboard focus could stay in the shell →
+  the program in front is activated before typing.
+- The Start menu, activated right after mapping, could be seen as an
+  unknown active window, making the shell think Today was showing →
+  unknown active windows keep the previous program (unit-tested).
+- `dev-session.sh` started Openbox against a display that was not ready
+  (twice in a row of runs): it now checks that its own X server answers
+  and starts Openbox again (up to 5 times) until it manages the screen.
+
+Still not done: any judgement on the physical panel.
+
 # POC 0.3 test results
 
 Date: 2026-10-24. Same environment as POC 0.2 below (Debian 13 arm64 dev
