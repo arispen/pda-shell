@@ -91,6 +91,21 @@ button_on_screen() {
     [ "$x" -ge 0 ] && [ "$y" -ge "$TOP" ] && [ $((x + w)) -le "$W" ] && [ $((y + h)) -le $((H - BOTTOM)) ]
 }
 text_has() { ui text "$1" "$2" "$3" | grep -qF -- "$4"; }
+# The file name field is the first row of a GTK file chooser at its left
+# edge: it is on screen when the dialog's left and top edges are (X
+# geometry; GTK 3's AT-SPI extents of the field were not reliable here).
+dialog_name_row_on_screen() {
+    local w g; w="$(xdotool search --onlyvisible --name "$1" | head -1)" || return 1
+    IFS=, read -r dx dy _ _ <<< "$(geom "$w")"
+    [ "$dx" -ge 0 ] && [ "$dy" -ge "$TOP" ]
+}
+dialog_name_row_off_screen() { ! dialog_name_row_on_screen "$@"; }
+# The built-in panel lies inside the work area (floating) or the screen.
+panel_inside() {
+    local g; g="$(geom "$(xdotool search --onlyvisible --name '^Input panel$' | head -1)")"
+    IFS=, read -r px py pw ph <<< "$g"
+    [ "$px" -ge 0 ] && [ "$py" -ge "$TOP" ] && [ $((px + pw)) -le "$W" ] && [ $((py + ph)) -le $((H - BOTTOM)) ]
+}
 # Park the pointer on the status bar title (no tooltips there) so screenshots
 # show the screen rather than a tooltip under the last tap; see
 # docs/known-limitations.md about tooltips after stylus taps.
@@ -100,7 +115,7 @@ shell_popup() {
     for w in $(xdotool search --onlyvisible --pid "$SHELL_PID" 2>/dev/null); do
         xwininfo -id "$w" 2>/dev/null | grep -q 'Override Redirect State: yes' || continue
         # The full-screen escape and the input panel are not popups.
-        case "$(xprop -id "$w" WM_NAME 2>/dev/null)" in *'"Exit full screen"'|*'"Input panel"') continue ;; esac
+        case "$(xprop -id "$w" WM_NAME 2>/dev/null)" in *'"Exit full screen"'|*'"Input panel"'|*'"Dialog arrows"') continue ;; esac
         echo "$w"; return 0
     done
     return 1
@@ -222,8 +237,19 @@ run_orientation() {
     check "Save As: Save button fully on screen" button_on_screen gnumeric "^Save$" "$dlg"
     check "Save As: Cancel button fully on screen" button_on_screen gnumeric "^Cancel$" "$dlg"
     shot 05b-save-as-dialog
+    # Too wide (portrait) or, with the docked keyboard, too tall (landscape):
+    # the shell offers arrows to slide the dialog to its cut-off part.
+    if [ "$ORIENT" = portrait ]; then local show=left back=right; else local show=top back=bottom; fi
+    check "Save As: the file name field is cut off at first" dialog_name_row_off_screen "$dlg"
+    check "Save As: arrows offered for the oversized dialog" wait_n 30 found pda-shell button "^Show the $show" --frame "^Dialog arrows$"
+    ui tap pda-shell button "^Show the $show" --frame "^Dialog arrows$" >/dev/null
+    check "Save As: '$show' arrow brings the file name field on screen" wait_n 30 dialog_name_row_on_screen "$dlg"
+    shot 05c-save-as-name-field
+    ui tap pda-shell button "^Show the $back" --frame "^Dialog arrows$" >/dev/null
+    check "Save As: '$back' arrow brings Save back" wait_n 30 button_on_screen gnumeric "^Save$" "$dlg"
     ui tap gnumeric button "^Cancel$" --frame "$dlg" >/dev/null
     check "Save As dialog closes" wait_n 50 bash -c "! python3 '$REPO/scripts/lib/pda_ui.py' find gnumeric button '^Cancel$' >/dev/null 2>&1"
+    check "the arrows go away with the dialog" wait_n 30 bash -c "! xdotool search --onlyvisible --name '^Dialog arrows$' >/dev/null 2>&1"
     bar "keyboard"
     check "keyboard hides and the work area is restored" wait_for bash -c "[ \"\$(xprop -root _NET_WORKAREA | sed 's/.*= //; s/ //g' | cut -d, -f1-4)\" = '$full_wa' ]"
     check "focus stays in Gnumeric after hiding the keyboard" is_active_class Gnumeric
@@ -380,8 +406,14 @@ run_orientation() {
     check "built-in input panel appears" wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
     sleep 0.5
     local kb_wa2; kb_wa2="$(workarea)"
-    check "work area shrinks above the built-in panel" [ "$kb_wa2" != "$full_wa" ]
-    check "Notes resized above the built-in panel" wait_for fills_workarea pda-notes
+    if [ "$ORIENT" = portrait ]; then
+        check "portrait: the built-in panel is docked, the work area shrinks" [ "$kb_wa2" != "$full_wa" ]
+        check "Notes resized above the built-in panel" wait_for fills_workarea pda-notes
+    else
+        check "landscape: the built-in panel floats, programs keep the work area ($kb_wa2)" [ "$kb_wa2" = "$full_wa" ]
+        check "landscape: the floating panel lies inside the work area" panel_inside
+        check "Notes keeps the whole work area" wait_for fills_workarea pda-notes
+    fi
     sip CAP p d a CAP space n o t e Shift '1|!'
     check "focus stayed in Notes while typing" is_active_class pda-notes
     shot 16-notes-builtin-panel
@@ -392,6 +424,39 @@ run_orientation() {
     bar "^Done$"
     check "Done shows the list of notes" wait_n 50 found pda-notes "list item" "^PDA note!$"
     check "note written to ~/Documents/Notes" bash -c "grep -qx 'PDA note!' '$docs'/Notes/*.txt"
+    # --- spreadsheet keys: the acceptance formula, built-in panel only ------
+    bar "^Today$"; wait_for showing_desktop 1
+    ui tap pda-shell "list item" "^Budget 2026.xlsx$" --frame "^Today$" --timeout 5 >/dev/null
+    check "Gnumeric reopened for the spreadsheet keys" wait_long has_class Gnumeric
+    sleep 1
+    bar "keyboard"
+    wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
+    sip 123
+    check "123 switches to the spreadsheet keys" wait_n 30 found pda-shell button "^SUM\($" --frame "^Input panel$"
+    # Name box: tap at its right end, clear it, type the cell.
+    local nx ny nw nh
+    read -r nx ny nw nh <<< "$(ui find gnumeric text "" --frame "Gnumeric" --pick leftmost)"
+    tap $((nx + nw - 12)) $((ny + nh / 2))
+    sip ⌫ ⌫ ⌫ ⌫ ⌫ B 2 0 ↵
+    sip = 'SUM\(' B 2 : B 1 3 '\)' '\*' 2 ↵
+    if [ "$ORIENT" = landscape ]; then
+        check "landscape: Gnumeric keeps the whole work area with the keys shown" fills_workarea Gnumeric
+        check "landscape: the spreadsheet keys float inside the work area" panel_inside
+    else
+        check "portrait: Gnumeric resized above the docked keys" fills_workarea Gnumeric
+    fi
+    check "focus stayed in Gnumeric while typing" is_active_class Gnumeric
+    shot 19-gnumeric-spreadsheet-keys
+    bar "^File$"; sleep 0.5
+    bar_item "^Save$"
+    sleep 2
+    check "saved file: =SUM(B2:B13)*2 typed with the spreadsheet keys (B20 = 104643)" [ "$(csv_cell "$docs/Budget 2026.xlsx" 20 2)" = "104643" ]
+    sip abc
+    check "abc returns to the full keyboard" wait_n 30 found pda-shell button "^space$" --frame "^Input panel$"
+    bar "keyboard"
+    bar "^Close$"
+    check "Gnumeric closes without asking (saved)" wait_long no_class Gnumeric
+
     bar "Input panel choice"; sleep 0.5
     bar_item "^Full keyboard"
     bar "^Today$"; wait_for showing_desktop 1

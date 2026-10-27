@@ -37,9 +37,36 @@ the issue asks for hardware.
 | P0 stylus | Touchscreen chosen by stable identity (udev symlink, `usb:VVVV:PPPP`, name or auto), never a mouse, keyboard or the daemon's own pointer | **unit-tested** (device choice), **automated, real kernel + synthetic device** (`stylus-test.sh`: fake mouse left alone, own pointer refused); USB panel **unverified** |
 | P0 stylus | System-wide hold → right click (`pda-device stylus`, evdev grab + uinput pointer), tap/hold/drag distinguished, no left click after a hold, drags and double taps intact | **unit-tested** (jitter, hold threshold, late tick, drag cancel, drag held still, double tap, SYN_DROPPED, removal), **automated, real kernel + synthetic device** (24 checks incl. grab exclusivity, unplug/replug, SIGTERM); in Gnumeric/Firefox with a pen **unverified** (Xvfb has no evdev input) |
 | P0 stylus | Calibration (five taps, per-user file, composed with the rotation) and the X fallback mapping without the daemon | **unit-tested** (fit, rotations, composition), **automated, simulated** (calibration screen with offset taps, cancel restores); on the panel **unverified** |
+| P1 landscape | Floating built-in panel (`[keyboard] placement = "auto"`: floating in landscape, docked in portrait): programs keep 1024×502 instead of 1024×302; drag its strip to move it, tap for the next corner | **automated, simulated** (work area unchanged, panel inside it, Notes and Gnumeric keep the work area), **unit-tested** (sizes, corners, dragging, placement); stylus dragging on the panel **unverified** |
+| P1 landscape | Spreadsheet keys (`123` / `abc`): 0–9, `= + - * / ( ) : . , % $`, `SUM(`, A–H, arrows, Tab, Return, Esc; general keyboard and Onboard unchanged | **automated** (`=SUM(B2:B13)*2` typed into Gnumeric with them in both orientations, value checked in the saved file), **unit-tested** (every required key present) |
+| P1 landscape | Keyboard on text focus (`[keyboard] show_on_focus`, AT-SPI), off by default; manual hide stays for that field; button keeps working | **automated** (smoke test: Mousepad's text and search fields, manual override, manual activation), **unit-tested** (decision); Firefox and Gnumeric cells **not covered** (see below) |
+| P1 dialogs | Arrows over the status bar for dialogs larger than the work area: slide Gnumeric's Save As to its file name field and back (portrait: left/right; landscape with a docked keyboard: up/down) | **automated** (name field off screen, arrow, on screen, back to Save, arrows gone with the dialog, both orientations), **unit-tested** (targets) |
+| P1 | Targets on the panel: shell 46 px; built-in keys 43 px wide in portrait (full keyboard), 60 px (spreadsheet keys docked in portrait), 48 px floating | computed; judgement on the panel **not done** |
 | P1 measurements | `device-bench.sh`: startup, idle/active memory and CPU, Gnumeric/Firefox launch latency, system report | script **automated, simulated**; board numbers **not done** |
 | P1 power | `pda-device info`: backlight, sleep states, power supplies, power key; DPMS blanking | report **demonstrated** (container); suspend, power draw **not done** |
 | P1 | Physical checklist with pass/fail ([device-checklist.md](device-checklist.md)) | written, **not filled in** |
+
+### POC 0.4 landscape input limitations
+
+- Floating applies to the built-in panel only; Onboard stays docked (its
+  own window placement). With Onboard, landscape programs still get
+  1024×302.
+- A floating panel covers part of the program: the field being typed
+  into can be under it. Gnumeric's edit line is at the top, so cells stay
+  editable; in other programs drag the panel away (the shell does not know
+  where the caret is).
+- Spreadsheet keys have the column letters A–H only; other letters need
+  `abc`.
+- Keyboard on focus: off by default. It reacts to AT-SPI focus events, so
+  Firefox needs accessibility enabled (`GNOME_ACCESSIBILITY=1`), plain X11
+  programs never trigger it, and Gnumeric's sheet grid is not an editable
+  text field (cells are typed into directly): the keyboard button remains
+  the way there. The shell's own Start search field triggered it in a
+  manual run but not reliably in the automated one (GTK 4 reports its focus
+  late). The panel is never hidden automatically.
+- The dialog arrows slide the whole dialog; nothing in it is resized or
+  rearranged. A file name typed in portrait needs: arrow left, tap the
+  field, type, arrow right, Save (or Return on the keyboard).
 
 ### POC 0.4 stylus limitations
 
@@ -146,7 +173,8 @@ checked on the device before the tokens are final. Record findings in
   (works in X11, not tested with every program). Its keys are 43 px wide
   in portrait (14 per row on 600 px), below the 46 px target; Onboard
   remains the default until it is judged on the panel.
-- Neither input panel appears by itself when a text field gets the focus.
+- (POC 0.3) Neither input panel appeared by itself when a text field got
+  the focus. Since POC 0.4: optional, `[keyboard] show_on_focus`.
 
 ### Smaller POC 0.3 limitations
 
@@ -188,7 +216,7 @@ checked on the device before the tokens are final. Record findings in
 | 5 | Keyboard shrinks the work area; apps, Today and the Start menu resize above it | **automated** (both orientations) |
 | 5 | Shell's keyboard toggle follows Onboard's own hide key / Onboard exiting | **unit-tested**; D-Bus signal **demonstrated** in the log |
 | 5 | Focus stays in the application when the keyboard is shown or hidden | **automated** (Gnumeric) |
-| 5 | Automatic keyboard on text focus | **not done** (manual by design for the POC) |
+| 5 | Automatic keyboard on text focus | optional since POC 0.4 (`show_on_focus`, off by default); **automated** in the smoke test |
 | 6 | Density profiles compact / balanced / readable in `config/pda-shell.toml` | **automated** in compact; readable and balanced **demonstrated** (see [screenshots.md](screenshots.md)) |
 | 6 | Physical size table for the 237 ppi panel | done: [ergonomics.md](ergonomics.md) |
 | 6 | Today: date first, recent documents (incl. newest files in ~/Documents), open programs, then shortcuts | **demonstrated**, list contents **automated** |

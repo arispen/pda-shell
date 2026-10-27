@@ -112,6 +112,14 @@ pub struct KeyboardConfig {
     /// the default) or "pocketpc" (the shell's built-in Pocket PC style
     /// panel). The arrow beside the button switches at run time.
     pub panel: String,
+    /// Where the built-in panel goes: "docked" (programs shrink above it),
+    /// "floating" (over programs, in a corner, movable) or "auto"
+    /// (floating in landscape, docked in portrait).
+    pub placement: String,
+    /// Show the input panel when a text field gets the focus (AT-SPI). The
+    /// keyboard button keeps working, and hiding the panel by hand keeps it
+    /// hidden for that field.
+    pub show_on_focus: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -306,7 +314,13 @@ impl Default for TodayConfig {
 
 impl Default for KeyboardConfig {
     fn default() -> Self {
-        Self { command: vec!["pda-onboard".into()], layout: "Small".into(), panel: "onboard".into() }
+        Self {
+            command: vec!["pda-onboard".into()],
+            layout: "Small".into(),
+            panel: "onboard".into(),
+            placement: "auto".into(),
+            show_on_focus: false,
+        }
     }
 }
 
@@ -518,6 +532,16 @@ mod tests {
         assert_eq!(cfg.windows.fullscreen, FullscreenMode::Prevent);
         assert!(cfg.windows.fit_dialogs);
         assert_eq!(cfg.start_menu.hidden, vec!["a.desktop".to_string()]);
+    }
+
+    #[test]
+    fn keyboard_placement_and_focus() {
+        let cfg = Config::parse_with_density("[keyboard]\nplacement = \"floating\"\nshow_on_focus = true\n", None).unwrap();
+        assert_eq!(cfg.keyboard.placement, "floating");
+        assert!(cfg.keyboard.show_on_focus);
+        let shipped = Config::parse_with_density(include_str!("../config/pda-shell.toml"), None).unwrap();
+        assert_eq!(shipped.keyboard.placement, "auto", "floating in landscape");
+        assert!(!shipped.keyboard.show_on_focus, "manual activation stays the default");
     }
 
     #[test]

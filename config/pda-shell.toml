@@ -88,6 +88,15 @@ layout = "Small"
 # shell's built-in Pocket PC style keyboard (prototype). The arrow next to
 # the keyboard button switches between them while the shell runs.
 panel = "onboard"
+# The built-in panel: "docked" (programs shrink above it), "floating" (over
+# programs in a corner of the work area: drag its strip to move it, tap the
+# strip for the next corner) or "auto": floating in landscape, where a
+# docked keyboard leaves programs 302 px, docked in portrait.
+placement = "auto"
+# Show the input panel when a text field gets the focus (AT-SPI; GTK
+# programs, Firefox with accessibility on). The keyboard button keeps
+# working; hiding the panel by hand keeps it hidden for that field.
+show_on_focus = false
 
 [start_menu]
 # Technical utilities kept out of the program list. They are still found by

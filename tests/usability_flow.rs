@@ -15,6 +15,7 @@ fn windows(list: &[&AppWindow], active: Option<u32>, showing_desktop: bool) -> E
         windows: list.iter().map(|w| (*w).clone()).collect(),
         active: active.map(WindowId),
         showing_desktop,
+        overflow: None,
     })
 }
 

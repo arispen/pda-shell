@@ -108,6 +108,16 @@ impl KeyChord {
     }
 }
 
+/// A dialog that does not fit the work area even after shrinking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DialogOverflow {
+    pub window: WindowId,
+    /// Outer (frame) size.
+    pub size: (u32, u32),
+    /// The work area it was fitted into.
+    pub area: crate::shell::layout::Rect,
+}
+
 /// What the window manager currently reports.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WindowSnapshot {
@@ -116,6 +126,8 @@ pub struct WindowSnapshot {
     /// The active window, if it is one of `windows`.
     pub active: Option<WindowId>,
     pub showing_desktop: bool,
+    /// The most recent dialog larger than the work area, if any.
+    pub overflow: Option<DialogOverflow>,
 }
 
 /// Requests the shell makes of the window manager.

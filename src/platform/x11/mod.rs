@@ -10,7 +10,7 @@ pub mod gtk_glue;
 pub mod keys;
 pub mod settings;
 
-use super::{AppWindow, KeyChord, SurfaceRole, WindowId, WindowSnapshot, WindowSystem};
+use super::{AppWindow, DialogOverflow, KeyChord, SurfaceRole, WindowId, WindowSnapshot, WindowSystem};
 use crate::shell::layout::{fit_within, Rect};
 use std::collections::{HashMap, HashSet};
 use x11rb::connection::Connection;
@@ -151,6 +151,24 @@ impl X11 {
         self.conn.configure_window(window, &aux)?;
         self.conn.flush()?;
         Ok(())
+    }
+
+    /// Move another program's window (its outer frame) without resizing
+    /// it; `None` keeps that coordinate.
+    pub fn move_window(&self, id: WindowId, x: Option<i32>, y: Option<i32>) -> Result<()> {
+        // Gravity NorthWest (1), x and/or y present, source = pager.
+        let flags = 1 | (x.is_some() as u32) << 8 | (y.is_some() as u32) << 9 | (2 << 12);
+        self.send_root_message(
+            id.0,
+            self.atoms._NET_MOVERESIZE_WINDOW,
+            [flags, x.unwrap_or(0) as u32, y.unwrap_or(0) as u32, 0, 0],
+        )
+    }
+
+    /// Where the pointer (stylus) is, in root coordinates.
+    pub fn pointer(&self) -> Result<(i32, i32)> {
+        let r = self.conn.query_pointer(self.root)?.reply()?;
+        Ok((r.root_x as i32, r.root_y as i32))
     }
 
     /// Put one of the shell's unmanaged windows on top of the stack.
@@ -421,6 +439,9 @@ struct Watcher {
     dialogs: HashMap<u32, (Option<Rect>, (u32, u32))>,
     /// Windows already reported as not fitting, so the log stays readable.
     reported: HashSet<u32>,
+    /// Dialogs that do not fit even after shrinking: outer size and the
+    /// work area they were fitted into.
+    overflowing: HashMap<u32, ((u32, u32), Rect)>,
     last_active: Option<WindowId>,
 }
 
@@ -513,6 +534,7 @@ impl Watcher {
         self.watched.retain(|w| ids.contains(w));
         self.dialogs.retain(|w, _| ids.contains(w));
         self.reported.retain(|w| ids.contains(w));
+        self.overflowing.retain(|w, _| ids.contains(w));
         self.check_geometry(&clients);
         let a = &self.x.atoms;
 
@@ -535,7 +557,11 @@ impl Watcher {
         let active = resolve_active(&clients, &windows, active_raw, self.last_active, self.own_pid);
         self.last_active = active;
         let _ = self.x.conn.flush();
-        WindowSnapshot { windows, active, showing_desktop }
+        // The newest overflowing dialog (client list order is mapping order).
+        let overflow = ids.iter().rev().find_map(|id| {
+            self.overflowing.get(id).map(|(size, area)| DialogOverflow { window: WindowId(*id), size: *size, area: *area })
+        });
+        WindowSnapshot { windows, active, showing_desktop, overflow }
     }
 
     /// Outer (frame) rectangle of a managed window in root coordinates.
@@ -574,6 +600,7 @@ impl Watcher {
             let client_size = (outer.width - l - r, outer.height - t - b);
             self.dialogs.insert(c.id, (Some(wa), client_size));
             let min = min_size(&hints).map_or((0, 0), |(w, h)| (w + l + r, h + t + b));
+            self.overflowing.remove(&c.id);
             let Some(fit) = fit_within(outer, wa, min).filter(|_| self.fit_dialogs) else {
                 if !wa.contains(&outer) {
                     log::warn!("geometry: dialog {:?} ({}) outside the work area: {outer:?}", c.title, c.class);
@@ -585,6 +612,7 @@ impl Watcher {
                     "geometry: dialog {:?} ({}) cannot shrink to the work area; aligned to keep its buttons visible",
                     c.title, c.class
                 );
+                self.overflowing.insert(c.id, ((fit.width, fit.height), wa));
             }
             log::info!("geometry: fitting dialog {:?} ({}) from {outer:?} into {fit:?}", c.title, c.class);
             // Gravity NorthWest (1), x/y/width/height present, source = pager.
@@ -680,6 +708,7 @@ pub fn spawn_watcher(own_pid: u32, fit_dialogs: bool) -> Result<async_channel::R
             watched: HashSet::new(),
             dialogs: HashMap::new(),
             reported: HashSet::new(),
+            overflowing: HashMap::new(),
             last_active: None,
         }
         .run(tx)
