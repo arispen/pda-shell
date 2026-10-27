@@ -54,6 +54,7 @@ cleanup() {
         kill "$SESSION" 2>/dev/null; wait "$SESSION" 2>/dev/null
     fi
     [ -n "${BENCH_HOME:-}" ] && rm -rf "$BENCH_HOME"
+    [ -n "${LAUNCHED:-}" ] && rm -f "$LAUNCHED"
 }
 trap cleanup EXIT
 
@@ -92,7 +93,16 @@ session_pids() {
     pgrep -x Xorg; pgrep -x Xvfb
 }
 proc_rss() { local p="$1"; awk '/^VmRSS/{print $2}' "/proc/$p/status" 2>/dev/null; }
-cpu_ticks() { local p t=0; for p in "$@"; do t=$((t + $(awk '{print $14 + $15}' "/proc/$p/stat" 2>/dev/null || echo 0))); done; echo "$t"; }
+# utime + stime: fields 14 and 15 of /proc/PID/stat, counted after the
+# parenthesized name, which may contain spaces ("Web Content").
+cpu_ticks() {
+    local p t=0 v
+    for p in "$@"; do
+        v="$(sed 's/.*) //' "/proc/$p/stat" 2>/dev/null | awk '{print $12 + $13}')"
+        t=$((t + ${v:-0}))
+    done
+    echo "$t"
+}
 # CPU use of the session over IDLE seconds, in % of one core.
 cpu_pct() {
     local pids; pids=($(session_pids))
@@ -101,7 +111,14 @@ cpu_pct() {
 }
 mem_used_mib() { awk '/^MemTotal/{t=$2} /^MemAvailable/{a=$2} END{printf "%d", (t - a) / 1024}' /proc/meminfo; }
 session_rss_mib() { local pids; pids=($(session_pids)); local s=0 p r; for p in "${pids[@]}"; do r="$(proc_rss "$p")"; s=$((s + ${r:-0})); done; echo $((s / 1024)); }
-named_rss_mib() { local s=0 p r; for p in $(pgrep -x "$1"); do r="$(proc_rss "$p")"; s=$((s + ${r:-0})); done; echo $((s / 1024)); }
+# Programs the benchmark started: each in its own process group (setsid),
+# recorded here, so that measuring and closing them never touches the
+# same programs in other sessions or the user's own windows (--attach).
+LAUNCHED="$(mktemp)"
+# Lines "CLASS PGID". launched_pids [CLASS]: every process of those groups
+# (Firefox's content processes included).
+launched_pids() { local c g; while read -r c g; do [ -z "${1:-}" ] || [ "$c" = "$1" ] && pgrep -g "$g"; done < "$LAUNCHED"; }
+named_rss_mib() { local s=0 p r; for p in $(launched_pids "$1"); do r="$(proc_rss "$p")"; s=$((s + ${r:-0})); done; echo $((s / 1024)); }
 
 clients() { xprop -root _NET_CLIENT_LIST 2>/dev/null | sed -n 's/.*window id # //p' | tr -d ','; }
 has_window() { local w; for w in $(clients); do xprop -id "$w" WM_CLASS 2>/dev/null | grep -qi "\"$1\"" && return 0; done; return 1; }
@@ -111,8 +128,9 @@ launch_latency() {
     local class="$1"; shift
     local t0 t1 pid n=0
     t0="$(now_ms)"
-    "$@" >/dev/null 2>&1 &
+    setsid "$@" >/dev/null 2>&1 &
     pid=$!
+    echo "$class $pid" >> "$LAUNCHED"
     while ! has_window "$class"; do
         sleep 0.05; n=$((n + 1))
         [ "$n" -gt 1200 ] && { echo "timeout"; kill "$pid" 2>/dev/null; return 1; }
@@ -120,14 +138,23 @@ launch_latency() {
     t1="$(now_ms)"
     awk -v d=$((t1 - t0)) 'BEGIN { printf "%.2f", d / 1000 }'
 }
+# Close the programs the benchmark started (only those, or only CLASS):
+# their windows, then their process groups.
 close_all() {
-    local w
+    local w pid mine c g keep
+    mine=" $(launched_pids "${1:-}" | tr '\n' ' ') "
     for w in $(clients); do
-        xprop -id "$w" WM_CLASS 2>/dev/null | grep -qiE '"(gnumeric|firefox-esr|firefox)"' || continue
+        pid="$(xprop -id "$w" _NET_WM_PID 2>/dev/null | sed -n 's/.* = //p')"
+        [[ -n "$pid" && "$mine" == *" $pid "* ]] || continue
         xdotool windowclose "$w" 2>/dev/null || wmctrl -i -c "$w" 2>/dev/null || true
     done
-    pkill -x gnumeric 2>/dev/null; pkill -f firefox-esr 2>/dev/null
     sleep 2
+    keep="$(mktemp)"
+    while read -r c g; do
+        if [ -z "${1:-}" ] || [ "$c" = "$1" ]; then kill -TERM -- "-$g" 2>/dev/null; else echo "$c $g" >> "$keep"; fi
+    done < "$LAUNCHED"
+    mv "$keep" "$LAUNCHED"
+    sleep 1
 }
 
 # --- report --------------------------------------------------------------------
@@ -167,19 +194,19 @@ g=(); f=()
 for i in $(seq "$RUNS"); do
     g+=("$(launch_latency gnumeric gnumeric "$DOCS/Budget 2026.xlsx")")
     sleep 3
-    [ "$i" -lt "$RUNS" ] && close_all
+    [ "$i" -lt "$RUNS" ] && close_all gnumeric
 done
 out "| Gnumeric opening Budget 2026.xlsx, window mapped (${RUNS} runs) | ${g[*]} s |"
 for i in $(seq "$RUNS"); do
     f+=("$(launch_latency firefox-esr firefox-esr "file://$DOCS/Web/index.html")")
     sleep 5
-    [ "$i" -lt "$RUNS" ] && pkill -f firefox-esr 2>/dev/null && sleep 2
+    [ "$i" -lt "$RUNS" ] && close_all firefox-esr
 done
 out "| Firefox ESR opening Web/index.html, window mapped (${RUNS} runs) | ${f[*]} s |"
 sleep 3
 out "| Active (Gnumeric + Firefox open): memory used (system) | $(mem_used_mib) MiB |"
 out "| Active: Gnumeric RSS | $(named_rss_mib gnumeric) MiB |"
-out "| Active: Firefox RSS (all processes) | $(( $(for p in $(pgrep -f firefox-esr); do proc_rss "$p"; done | awk '{s+=$1} END{print s+0}') / 1024 )) MiB |"
+out "| Active: Firefox RSS (all processes) | $(named_rss_mib firefox-esr) MiB |"
 out "| Active: session CPU over ${IDLE} s, both programs idle | $(cpu_pct) % of one core |"
 close_all
 out ""
