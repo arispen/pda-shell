@@ -128,6 +128,20 @@ orientation = "landscape"
 rotate = "left"
 screen_off_minutes = 5    # blank the screen (DPMS) when idle; 0: never
 
+[stylus]
+# System-wide stylus input on the device (pda-device stylus, started by
+# device-session.sh): holding the stylus still for [input] long_press_ms
+# right-clicks in every program. Only a touchscreen is ever taken over.
+# "auto": the only touchscreen-like device; or the udev symlink
+# "/dev/input/pda-touchscreen" (config/device/70-pda-touchscreen.rules),
+# "usb:VVVV:PPPP", or part of the device name.
+device = "auto"
+right_click = true
+# libinput-style matrix in the panel's own orientation (rotation is added
+# for portrait). pda-device calibrate saves a per-user calibration to
+# ~/.config/pda-shell/stylus-calibration, which takes precedence.
+calibration = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+
 # --- Density profiles ----------------------------------------------------
 # Candidates for the readability test on the real panel. Each profile only
 # lists what it changes; all keys of [design] are allowed.

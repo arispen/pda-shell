@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Calibrate stylus
+Comment=Tap five crosses to align the touchscreen with the screen
+Exec=pda-device calibrate
+Icon=pda-input
+Terminal=false
+Categories=Settings;HardwareSettings;
+StartupNotify=false

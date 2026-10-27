@@ -1,0 +1,16 @@
+# udev rules for the device session's stylus input. Installed to
+# /etc/udev/rules.d/ by scripts/install-device.sh.
+
+# The stylus daemon (pda-device stylus) creates its virtual pointer with
+# uinput and runs as the session user, who is in the "input" group. This
+# also lets that user inject input events: acceptable on a single-user
+# device, not on a shared machine.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"
+
+# A stable name for the touchscreen: /dev/input/pda-touchscreen, whatever
+# event number it gets. By default every USB touchscreen udev recognises;
+# with more than one, put the panel's ids here (pda-device inputs or
+# `udevadm info /dev/input/eventN` shows them) and use the symlink as
+# [stylus] device in /etc/pda-shell/pda-shell.toml.
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHSCREEN}=="1", ENV{ID_BUS}=="usb", SYMLINK+="input/pda-touchscreen"
+# SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="0eef", ATTRS{idProduct}=="0001", SYMLINK+="input/pda-touchscreen"

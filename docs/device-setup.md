@@ -120,7 +120,42 @@ Screen blanking: `[device] screen_off_minutes` (DPMS; any tap wakes the
 screen). The panel's backlight is not software-controlled over HDMI;
 `pda-device info` lists `/sys/class/backlight` devices if the board has any.
 
-## 5. Power, backlight, suspend: what exists
+## 5. Stylus
+
+`install-device.sh` installs `/etc/udev/rules.d/70-pda-touchscreen.rules`
+(the `/dev/input/pda-touchscreen` symlink for USB touchscreens, and
+`/dev/uinput` for the `input` group) and loads `uinput` at boot. At start
+the session:
+
+1. finds the touchscreen (`[stylus] device`, default `auto`: the only
+   device with absolute X/Y and a touch or button key and no relative
+   axes; mice and keyboards are never taken) and gives the X server its
+   rotation and calibration with `xinput`, so taps work even without the
+   daemon;
+2. starts `pda-device stylus` (log: `stylus.log`), which grabs it and adds
+   hold-to-right-click for every program. If the daemon exits it is
+   restarted; after 5 failures in 60 s the X server keeps the plain
+   touchscreen.
+
+Check and calibrate *(board)*:
+
+```bash
+pda-device inputs                 # every input device, and which one is the touchscreen
+sudo evtest /dev/input/pda-touchscreen   # raw events (stop the session first: the daemon grabs it)
+```
+
+Settings → Stylus opens `pda-device calibrate`: tap the five crosses; the
+calibration is saved to `~/.config/pda-shell/stylus-calibration` (in the
+panel's own orientation, so it stays valid in portrait) and the daemon
+reloads it. `[stylus] right_click = false` turns the hold translation off
+(the stylus is then a plain left button). The hold time and slop are
+`[input] long_press_ms` and `long_press_slop_px`, shared with the shell.
+
+`sudo ./scripts/stylus-test.sh` runs the daemon against a fake uinput
+touchscreen and mouse on the board's own kernel (stop the session first,
+so its daemon does not grab the fake device).
+
+## 6. Power, backlight, suspend: what exists
 
 `pda-device info` reports, read-only: board, RAM, OS and kernel, CPU
 governor, `/sys/class/backlight`, the sleep states the kernel offers
@@ -135,7 +170,7 @@ devices with a power key. What the session does with them in POC 0.4:
 | Suspend/resume | **Not claimed.** List the board's sleep states with `pda-device info` and try `systemctl suspend` by hand *(board)*; USB touch wake-up and HDMI after resume are the expected blockers. |
 | Battery | None on the prototype (external USB power). The status bar shows a battery only if `/sys/class/power_supply` has one. |
 
-## 6. Measuring
+## 7. Measuring
 
 ```bash
 ./scripts/device-bench.sh --attach     # on the board, inside the running session (as its user)
@@ -151,7 +186,7 @@ the screen blanked; keep external measurements apart from any battery-life
 estimate. `--simulate` runs the same report in a virtual session (e.g. the
 container) to compare changes, never as device evidence.
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Check |
 |---|---|
@@ -161,4 +196,6 @@ container) to compare changes, never as device evidence.
 | Wrong resolution | `xrandr-before.txt` in the log directory shows what the panel offered; set `[device] mode`, or the `video=` parameter above. |
 | Session restarts in a loop | `session.log`: "giving up" after 5 shell crashes; `shell.log` has the reason. systemd stops after 5 restarts in 2 minutes. |
 | Get out of the session with a keyboard | Ctrl+Alt+F1 for a text console; `sudo systemctl disable --now pda-shell-session` to stop starting it at boot. |
-| Touchscreen does nothing | `sudo libinput list-devices` and `sudo evtest` must show the USB controller; see [hardware.md](hardware.md). |
+| Touchscreen does nothing | `pda-device inputs` (as the session user) must list it as the touchscreen; `stylus.log` says what the daemon did; `sudo libinput list-devices`. |
+| Taps land beside the target | Settings → Stylus (calibration); in portrait check `[device] rotate` (left/right) matches how the panel is mounted. |
+| No right click on hold | `stylus.log`: "translating ..." must name the touchscreen; `ls -l /dev/uinput` must show group `input`; the user must be in `input` (log out and in after install). |

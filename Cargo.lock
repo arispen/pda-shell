@@ -663,6 +663,7 @@ dependencies = [
  "gdk4-x11",
  "glib",
  "gtk4",
+ "libc",
  "log",
  "serde",
  "toml 0.8.23",

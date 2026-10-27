@@ -30,6 +30,8 @@
 # ask about unsaved work) and ends the session with status 0. If pda-shell
 # crashes it is restarted (programs keep running and reappear in the
 # switcher); after 5 crashes within 60 s the session ends with status 1.
+# The stylus daemon (hold to right-click, pda-device stylus) is restarted the
+# same way; if it keeps failing the X server keeps the plain touchscreen.
 # Stopping the script (SIGTERM, Ctrl+C on the console) ends the X server and
 # every program of the session. Logs: ~/.local/state/pda-shell/logs/latest/.
 set -euo pipefail
@@ -148,7 +150,7 @@ cleanup() {
     done
     # Programs first, the X server last, so nothing loses its display while
     # still shutting down.
-    for group in "${tagged[*]:-} ${SHELL_PID:-} ${OPENBOX_PID:-} ${DBUS_PID:-}" "${XSERVER_PID:-}"; do
+    for group in "${tagged[*]:-} ${SHELL_PID:-} ${STYLUS_PID:-} ${OPENBOX_PID:-} ${DBUS_PID:-}" "${XSERVER_PID:-}"; do
         # shellcheck disable=SC2086
         set -- $group
         [ $# -eq 0 ] && continue
@@ -215,12 +217,15 @@ xrandr --query > "$LOG_DIR/xrandr-before.txt" 2>&1 || true
 if plan="$("$BIN_DIR/pda-device" display --xrandr "$LOG_DIR/xrandr-before.txt" "${plan_args[@]}" 2>>"$LOG_DIR/session.log")"; then
     eval "$plan"
     log "display plan: output $OUTPUT mode $MODE rotation $ROTATION -> ${WIDTH}x${HEIGHT} $ORIENTATION (panel ${SIZE_MM} mm, ${PPI} ppi)"
-    if ! xrandr --output "$OUTPUT" --mode "$MODE" --rotate "$ROTATION" >> "$LOG_DIR/session.log" 2>&1; then
+    if xrandr --output "$OUTPUT" --mode "$MODE" --rotate "$ROTATION" >> "$LOG_DIR/session.log" 2>&1; then
+        SCREEN_ROTATION="$ROTATION"
+    else
         log "xrandr could not set $MODE $ROTATION on $OUTPUT; keeping the current mode"
     fi
 else
     log "no display plan (see above); keeping the X server's choice"
 fi
+SCREEN_ROTATION="${SCREEN_ROTATION:-normal}"
 read -r SCREEN_W SCREEN_H < <(xdpyinfo | awk '/dimensions:/ { split($2, d, "x"); print d[1], d[2] }')
 if [ "$SCREEN_H" -gt "$SCREEN_W" ]; then SCREEN_ORIENTATION=portrait; else SCREEN_ORIENTATION=landscape; fi
 log "screen ${SCREEN_W}x${SCREEN_H} $SCREEN_ORIENTATION"
@@ -241,6 +246,8 @@ export GDK_BACKEND=x11
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=pda-shell
 export PDA_SHELL_ORIENTATION="$SCREEN_ORIENTATION"
+# The touchscreen follows the picture (pda-device stylus, touch, calibrate).
+export PDA_DEVICE_ROTATION="$SCREEN_ROTATION"
 export PDA_SHELL_ICONS="$ROOT/assets/icons"
 export PATH="$ROOT/scripts/bin:$BIN_DIR:$PATH"
 export XDG_DATA_DIRS="$ROOT/config/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
@@ -288,6 +295,34 @@ start_openbox || { log "openbox is not running; see $LOG_DIR/openbox.log"; exit 
 T_WM="$(since "$T0")"
 log "openbox running (pid $OPENBOX_PID)"
 
+# --- stylus ------------------------------------------------------------------------
+# The X server first gets the touchscreen itself, rotated and calibrated
+# (pda-device touch): plain taps and drags work even if the daemon cannot
+# run. The daemon then grabs it and adds hold-to-right-click for every
+# program through its virtual pointer; if it stops, the grab ends and X has
+# the touchscreen again.
+STYLUS_PID=""
+STYLUS_FAILS=()
+if touch_info="$("$BIN_DIR/pda-device" touch 2>>"$LOG_DIR/session.log")"; then
+    eval "$touch_info"
+    log "touchscreen $TOUCH_DEVICE ($TOUCH_NAME, $TOUCH_ID), rotation $SCREEN_ROTATION"
+    if command -v xinput >/dev/null; then
+        xinput set-prop "pointer:$TOUCH_NAME" "Coordinate Transformation Matrix" $TOUCH_MATRIX \
+            >> "$LOG_DIR/session.log" 2>&1 || log "xinput cannot map $TOUCH_NAME; the X server keeps its default"
+    fi
+    HAVE_TOUCH=1
+else
+    log "no touchscreen (pda-device inputs lists the devices); no stylus translation"
+    HAVE_TOUCH=0
+fi
+start_stylus() {
+    RUST_LOG="${RUST_LOG_STYLUS:-info}" "$BIN_DIR/pda-device" stylus --screen "${SCREEN_W}x${SCREEN_H}" \
+        --rotation "$SCREEN_ROTATION" >> "$LOG_DIR/stylus.log" 2>&1 &
+    STYLUS_PID=$!
+    log "stylus daemon pid $STYLUS_PID (log stylus.log)"
+}
+[ "$HAVE_TOUCH" -eq 1 ] && start_stylus
+
 # --- the shell, restarted if it crashes ------------------------------------------
 shell_windows() {
     local n=0 w
@@ -332,7 +367,7 @@ crashes=()
 status=0
 while :; do
     status=0
-    wait -n "$SHELL_PID" "$XSERVER_PID" "$OPENBOX_PID" || status=$?
+    wait -n "$SHELL_PID" "$XSERVER_PID" "$OPENBOX_PID" ${STYLUS_PID:+"$STYLUS_PID"} || status=$?
     if ! kill -0 "$XSERVER_PID" 2>/dev/null; then
         log "X server exited; see $LOG_DIR/xserver.log"
         status=1
@@ -341,6 +376,23 @@ while :; do
     if ! kill -0 "$OPENBOX_PID" 2>/dev/null; then
         log "openbox exited; restarting it (programs keep their windows)"
         start_openbox || { log "openbox cannot be restarted"; status=1; break; }
+        continue
+    fi
+    if [ -n "$STYLUS_PID" ] && ! kill -0 "$STYLUS_PID" 2>/dev/null; then
+        # The X server has the raw touchscreen again (taps, no right click).
+        now="$(date +%s)"
+        recent=()
+        for t in "${STYLUS_FAILS[@]}" "$now"; do [ $((now - t)) -lt "$CRASH_WINDOW" ] && recent+=("$t"); done
+        STYLUS_FAILS=("${recent[@]}")
+        if [ "${#STYLUS_FAILS[@]}" -ge "$MAX_CRASHES" ]; then
+            log "stylus daemon exited with status $status, ${#STYLUS_FAILS[@]} times within ${CRASH_WINDOW} s;" \
+                "leaving the touchscreen to the X server (no hold-to-right-click)"
+            STYLUS_PID=""
+        else
+            log "stylus daemon exited with status $status; restarting it"
+            sleep 1
+            start_stylus
+        fi
         continue
     fi
     if kill -0 "$SHELL_PID" 2>/dev/null; then continue; fi

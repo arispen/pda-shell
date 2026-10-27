@@ -13,6 +13,7 @@ glib = "0.21"
 gdk4-x11 = { version = "0.10", features = ["v4_4"] }
 x11rb = { version = "0.13", default-features = false, features = ["xtest"] }
 async-channel = "2"
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 log = "0.4"

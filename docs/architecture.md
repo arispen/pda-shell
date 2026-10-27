@@ -121,11 +121,31 @@ Two layers, deliberately separate:
    of dots after 150 ms, fires the context menu at 600 ms (configurable), and
    claims the event sequence so the widget's own click does not also fire.
    Mouse right-click opens the same menu.
-2. **System-wide** (future, hardware milestone): a small daemon reading the
-   touchscreen's evdev device, running the same `gesture::Recognizer`, and
-   emitting left/right clicks through `uinput`. The recognizer has no GTK or
-   X11 dependency for this reason. During development it must only grab the
-   touchscreen device, never the developer's mouse.
+2. **System-wide** (POC 0.4, `pda-device stylus`, `src/device/`): a small
+   daemon reads the touchscreen's evdev device, grabs it (EVIOCGRAB, so the
+   X server does not also see it) and drives a virtual absolute pointer
+   made with uinput (left, middle, right buttons, like a VM tablet). The
+   touch-down is held back until the same `gesture::Recognizer` decides:
+   released early → left click; moved beyond the slop → left button down
+   at the press position, then the motion; held still for `long_press_ms` →
+   right click at the press position and nothing until the stylus lifts
+   (no stray left click). Decisions are in `device::stylus::Translator`
+   (pure, replayed in unit tests); `device::evdev` is the ioctl boundary;
+   `device::daemon` the loop (poll with a 20 ms tick while undecided,
+   SIGHUP reloads the calibration, SIGTERM releases everything). Only a
+   device with absolute X/Y, a touch or button key and no relative axes is
+   ever taken; mice, keyboards and the daemon's own pointer are refused
+   even by name. The virtual pointer is created before the grab, so a
+   daemon that cannot start leaves the touchscreen with the X server,
+   which device-session.sh maps with the same rotation and calibration
+   (`pda-device touch` → xinput "Coordinate Transformation Matrix").
+   Calibration is a libinput-style matrix in the panel's own orientation,
+   composed with the xrandr rotation; `pda-device calibrate` fits it from
+   five taps.
+
+Inside the shell's own windows the ring of dots appears only when GTK sees
+a held left button, i.e. without the daemon; with it, a hold arrives as a
+right click, which shell widgets handle the same way.
 
 ## Development session
 

@@ -81,6 +81,9 @@ sudo ./scripts/install-device.sh --enable     # build, install to /opt/pda-shell
 ```
 
 Or from a console login: `./scripts/device-session.sh [--orientation portrait] [--mode 800x480]`.
+On the device, holding the stylus still right-clicks in every program
+(`pda-device stylus`, grabs only the touchscreen); Settings → Stylus
+calibrates it.
 Screen output, mode and rotation come from `[device]` in the config;
 nothing assumes 1024×600. Board selection, boot configuration and
 troubleshooting: [docs/device-setup.md](docs/device-setup.md); the physical
@@ -106,7 +109,9 @@ cargo test                       # unit + integration tests (state machine, layo
 ./scripts/smoke-test.sh          # shell behaviour in both orientations (Xvfb + Openbox + real apps)
 ./scripts/app-workflow-test.sh   # real-program workflow, pointer and on-screen keyboard only
 ./scripts/device-test.sh         # the device session on Xvfb: 1024x600, 600x1024, 800x480,
-                                 # crash recovery, End session with unsaved work
+                                 # crash recovery, End session with unsaved work, calibration screen
+./scripts/container.sh uinput ./scripts/stylus-test.sh
+                                 # stylus daemon against a fake uinput touchscreen (real kernel)
 ```
 
 The **smoke test** checks the shell itself: struts and work area, Start menu
@@ -166,14 +171,16 @@ src/
   keyboard/   Onboard control
   platform/   neutral window types; x11/ = all X11/EWMH code, XSETTINGS (settings.rs),
               XTEST typing (keys.rs)
-  device/     physical device layer, no GTK: display plan from xrandr (display.rs),
-              system and power facts (system.rs); binary: src/bin/pda-device.rs
+  device/     physical device layer: display plan from xrandr (display.rs), system and
+              power facts (system.rs), stylus translation (stylus.rs: hold -> right click,
+              calibration), evdev/uinput (evdev.rs), the daemon (daemon.rs), the
+              calibration screen (calibrate.rs); binary: src/bin/pda-device.rs
 scripts/      setup-debian.sh, dev-session.sh, smoke-test.sh, app-workflow-test.sh,
               capture-screens.sh, capture-profiles.sh, container.sh,
               make-sample-files.py, bin/pda-onboard, lib/pda_ui.py;
               device: device-session.sh, install-device.sh, device-test.sh, device-bench.sh
 config/       pda-shell.toml, openbox/rc.xml, home/ (session HOME defaults),
-              device/ (systemd unit)
+              device/ (systemd unit, udev rules for the touchscreen and uinput)
 assets/       icons/ (the shell's original icon set), sample-files/ (documents copied
               into the session HOME)
 docs/         architecture, hardware, UX principles, ergonomics, test results,

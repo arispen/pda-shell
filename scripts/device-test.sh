@@ -100,6 +100,7 @@ run_screen() {
     note "startup: $(tr '\n' ' ' < "$LOG_DIR/startup.txt")"
     check "display plan logged" grep -q "display plan: output screen mode $screen" "$LOG_DIR/session.log"
     check "screen is ${W}x${H}" grep -q "screen ${W}x${H}" "$LOG_DIR/session.log"
+    check "no touchscreen here: logged, no stylus daemon started" grep -q "no touchscreen (pda-device inputs" "$LOG_DIR/session.log"
     local wa TOP WA_H BOTTOM
     wa="$(xprop -root _NET_WORKAREA | sed 's/.*= //; s/ //g' | cut -d, -f1-4)"
     IFS=, read -r _ TOP _ WA_H <<< "$wa"
@@ -174,8 +175,54 @@ crash_loop() {
     rm -rf "$home"
 }
 
+calibration() {
+    echo "== stylus calibration screen (pda-device calibrate)"
+    local home; home="$(mktemp -d "${TMPDIR:-/tmp}/pda-device-home.XXXXXX")"
+    DISPLAY_NUM=$((DISPLAY_NUM + 1))
+    Xvfb ":$DISPLAY_NUM" -screen 0 1024x600x24 -nolisten tcp > /dev/null 2>&1 &
+    local xvfb=$!
+    export DISPLAY=":$DISPLAY_NUM"
+    wait_for xdpyinfo >/dev/null 2>&1
+    openbox > /dev/null 2>&1 &
+    local wm=$!
+    sleep 0.5
+    local file="$home/.config/pda-shell/stylus-calibration"
+    mkdir -p "$(dirname "$file")"; echo "1 0 0 0 1 0" > "$file"
+    HOME="$home" XDG_CONFIG_HOME="" "$TARGET/pda-device" calibrate > "$home/out" 2>&1 &
+    local cal=$!
+    check "calibration screen opens full screen" wait_n 50 mapped_named "Calibrate stylus"
+    sleep 0.5
+    # A miscalibrated panel: every tap lands 20 px right of and 10 px below the cross.
+    for t in "0.08 0.08" "0.92 0.08" "0.92 0.92" "0.08 0.92" "0.5 0.5"; do
+        set -- $t
+        tap $(awk -v a="$1" 'BEGIN { print int(a * 1024) + 20 }') $(awk -v a="$2" 'BEGIN { print int(a * 600) + 10 }')
+        sleep 0.3
+    done
+    sleep 0.5
+    import -window root "$SHOTS/calibrate-saved.png"
+    local c; c="$(tr '\n' ' ' < "$file")"
+    check "saved calibration moves taps 20 px left, 10 px up ($c)" awk -v c="$c" 'BEGIN { split(c, m, " "); exit !(m[3] < -0.017 && m[3] > -0.021 && m[6] < -0.015 && m[6] > -0.018 && m[1] > 0.99 && m[5] > 0.99) }'
+    # Close: centred below the crosses (Again, Close), 100 px above the bottom.
+    tap $((1024 / 2 + 6 + 60)) $((600 - 100 - 23))
+    check "Close ends the calibration" wait_n 50 gone "$cal"
+    # Cancel puts the previous calibration back.
+    cp "$file" "$home/before"
+    HOME="$home" XDG_CONFIG_HOME="" "$TARGET/pda-device" calibrate > "$home/out2" 2>&1 &
+    cal=$!
+    wait_n 50 mapped_named "Calibrate stylus"; sleep 0.5
+    tap 100 50; sleep 0.3
+    check "during calibration the saved file is the identity" grep -q "^1.000000 0.000000 0.000000" "$file"
+    kill -TERM "$cal"
+    wait_n 50 gone "$cal"
+    check "stopping it before the end restores the previous calibration" cmp -s "$file" "$home/before"
+    kill "$wm" "$xvfb" 2>/dev/null; wait "$wm" "$xvfb" 2>/dev/null
+    unset DISPLAY
+    rm -rf "$home"
+}
+
 for s in "${SCREENS[@]}"; do run_screen "$s"; done
 crash_loop
+calibration
 echo
 echo "device test: $PASS passed, $FAIL failed (screenshots in $SHOTS)"
 [ "$FAIL" -eq 0 ]
