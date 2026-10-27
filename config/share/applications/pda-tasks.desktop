@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Tasks
+GenericName=To-do list
+Comment=Things to do, stored on this device
+Exec=pda-tasks %F
+Icon=pda-app-tasks
+Terminal=false
+Categories=Office;ProjectManagement;
+Keywords=todo;to-do;task;checklist;
+StartupWMClass=pda-tasks
+Actions=new-task;
+
+[Desktop Action new-task]
+Name=New task
+Exec=pda-tasks --new

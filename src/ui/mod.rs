@@ -157,6 +157,18 @@ list.compact row:hover {{ background: {surface_alt}; }}
 list.compact row:selected, list.compact row:active {{ background: {accent}; color: {accent_fg}; }}
 list.compact row:selected label, list.compact row:active label {{ color: {accent_fg}; }}
 list.compact row:focus-visible {{ outline: 1px solid {focus}; }}
+/* Today's Calendar and Tasks: as tight as the text lines they replaced; the
+   whole row is the target. */
+list.today-lines row {{ min-height: 0; padding: 0; }}
+.form {{ padding: {pad}px {pad2}px; }}
+.form-error {{ color: #b3261e; font-weight: bold; }}
+window.native textview.notes-field {{ border: 1px solid {border}; }}
+.event-time {{ min-width: 7em; }}
+list.compact row.day-heading {{ background: {surface_alt}; min-height: 0; }}
+list.compact row .task-done {{ color: {text_dim}; text-decoration: line-through; }}
+list.compact row .overdue {{ color: #b3261e; }}
+list.compact row .priority-mark {{ color: #b3261e; font-weight: bold; padding: 0 {pad}px; }}
+list.compact row.checked {{ background: {surface_alt}; box-shadow: inset 3px 0 {accent}; }}
 .kv-key {{ color: {text_dim}; font-size: {small_px}px; }}
 
 /* Start menu: a drop-down anchored under the Start button */
@@ -358,7 +370,9 @@ impl MenuItem {
 }
 
 /// Pop up a compact context menu at (x, y) in `widget` coordinates.
-pub fn popup_menu(widget: &gtk::Widget, x: f64, y: f64, items: Vec<MenuItem>) {
+pub fn popup_menu(widget: &gtk::Widget, x: f64, y: f64, items: Vec<MenuItem>, row_px: u32) {
+    // Rows are at least `row_px` high (stylesheet), plus the frame.
+    let needed = (items.len() as u32 * row_px + 16) as f32;
     let model = gio::Menu::new();
     let group = gio::SimpleActionGroup::new();
     for (i, item) in items.into_iter().enumerate() {
@@ -375,6 +389,20 @@ pub fn popup_menu(widget: &gtk::Widget, x: f64, y: f64, items: Vec<MenuItem>) {
     popover.insert_action_group("ctx", Some(&group));
     popover.set_parent(widget);
     popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+    // Below the stylus, else above; when neither side has room for every
+    // row (a long menu from the middle of a landscape screen), beside it,
+    // where it can use the window's whole height instead of scrolling.
+    if let Some(root) = widget.root() {
+        let at = widget.compute_point(&root, &gtk::graphene::Point::new(x as f32, y as f32));
+        let (below, above) = at.map_or((f32::MAX, 0.0), |p| (root.height() as f32 - p.y(), p.y()));
+        popover.set_position(if needed <= below {
+            gtk::PositionType::Bottom
+        } else if needed <= above {
+            gtk::PositionType::Top
+        } else {
+            gtk::PositionType::Right
+        });
+    }
     popover.connect_closed(|p| {
         let p = p.clone();
         glib::idle_add_local_once(move || p.unparent());
@@ -388,8 +416,9 @@ where
     F: Fn() -> Vec<MenuItem> + 'static,
 {
     let w = widget.as_ref().clone();
+    let row_px = cfg.design.target_px;
     input::attach_long_press(widget.as_ref(), feedback, cfg, move |x, y| {
-        popup_menu(&w, x, y, items());
+        popup_menu(&w, x, y, items(), row_px);
     });
 }
 

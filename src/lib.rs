@@ -6,6 +6,7 @@ pub mod device;
 pub mod input;
 pub mod keyboard;
 pub mod native;
+pub mod pim;
 pub mod platform;
 pub mod shell;
 pub mod ui;

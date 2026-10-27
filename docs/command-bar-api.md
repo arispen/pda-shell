@@ -15,7 +15,7 @@ program is in front. The middle part changes:
 
 | In front | Middle of the command bar |
 |---|---|
-| Today | **New ▴**: Note, Spreadsheet, Folder (only what is installed) |
+| Today | **New ▴**: Note, Event, Task, Spreadsheet, Folder (only what is installed) |
 | Programs, Settings, About, … | **OK** (up one level) |
 | Start menu open | **Cancel** |
 | A program that publishes its menus | **its own menus** |
@@ -62,7 +62,8 @@ How the model is shown:
 - Mnemonic underscores are removed ("_File" → "File").
 
 Programs that already do this, unmodified: **Mousepad** (File, Edit, Search,
-View, Document, Help) and the shell's native **Files** and **Notes**. GNOME
+View, Document, Help) and the shell's native **Files**, **Notes**,
+**Calendar** and **Tasks**. GNOME
 programs based on `GtkApplication` menu bars are expected to work the same
 way; Thunar and Gnumeric build their menus without it and get the fallback.
 
@@ -85,11 +86,24 @@ a program does not use one.
 
 ## Native programs
 
-`pda-files` and `pda-notes` (`src/native/`, `src/bin/`) are separate
+`pda-files`, `pda-notes`, `pda-calendar` and `pda-tasks` (`src/native/`,
+`src/bin/`) are separate
 programs, not part of the shell process: the window manager maximizes them,
 they appear in the switcher, Close sends them the normal close request. They
 share the shell's stylesheet and tokens (`Config::load`, `ui::install_stylesheet`)
 and use the API above for all their commands.
 
-Desktop actions (`[Desktop Action new-note]`, `new-folder`) are how Today's
-New menu starts them: `apps::launch_action`.
+Desktop actions (`[Desktop Action new-note]`, `new-folder`, `new-event`,
+`new-task`) are how Today's New menu starts them: `apps::launch_action`.
+Today opens a single event, task or note by passing its file
+(`Exec=pda-calendar %F`): `apps::launch_with`.
+
+Each program changes its menu bar with what is on screen, and every
+command is a window action shared by the menu and the hold-the-stylus menu:
+
+| Program | List / folder | Form or mode |
+|---|---|---|
+| Files | File (New folder, Find…, Properties, Open in Linux file manager), Edit (Select, Select all, Paste), Go (Up, Home, Documents, Show hidden files, sort) | selection: **Done**, Edit (Select all, Cut, Copy, Rename…, Delete, Properties); Find, Properties: **Done** |
+| Notes | **New**, View (Sort by date/title, Notes folder) | editor: **Done**, Edit, Tools |
+| Calendar | **New**, View (Day, Agenda, Go to today, Export to Documents) | form: **Done**, **Cancel**, **Delete** |
+| Tasks | **New**, View (Active tasks, Completed tasks, Export to Documents) | form: **Done**, **Cancel**, **Delete** |

@@ -1,7 +1,8 @@
 # Known limitations and status
 
-Last updated: 2026-10-27 (POC 0.4, issue #7: device session; POC 0.3 and
-0.2 sections below unchanged unless noted). Nothing here has
+Last updated: 2026-10-27 (POC 0.5, issue #8: native Files 2.0, Calendar,
+Tasks, Notes 2.0; POC 0.4, 0.3 and 0.2 sections below unchanged unless
+noted). Nothing here has
 been tried on the physical 5" resistive display yet; everything ran in the
 nested X11 session (Xvfb + Openbox, Debian 13 arm64 in the dev container).
 
@@ -19,6 +20,51 @@ Status words used below:
 There was no human at a physical screen. The "manual pointer-only test" of
 the issue was replayed by the workflow test with synthetic pointer taps; see
 [test-results.md](test-results.md).
+
+## POC 0.5 status (issue #8)
+
+All of this is **simulated** evidence (Xvfb in the Debian 13 arm64
+container); none of it has been used on the panel with a pen yet. That is
+part of POC 0.6 (#12). Storage formats and rules: [pim.md](pim.md).
+
+| Area | Item | Status |
+|---|---|---|
+| Files | Selection mode (Edit > Select, hold > Select), select all, cancel, count strip and check boxes; tap opens outside selection mode | **automated** (two files selected, then cut) |
+| Files | Copy / Cut / Paste between folders, folders included; Paste into folder from the hold menu; progress strip with Stop | **automated** (copy into a new folder, move two files, contents and disk checked), **unit-tested** (trees, symlinks, cross-folder moves, cancel, permission failure) |
+| Files | Name collisions: Replace (old one to the trash) / Keep both ("name 2.ext") / Skip; never overwritten in place; a folder cannot go into itself | **automated** (Keep both), **unit-tested** (all three, self-paste, vanished sources) |
+| Files | Properties (type, location, size, modified, access; folder size counted on a thread, up to 100 000 items) | **automated** (size of a file), **unit-tested** (sizes, limit) |
+| Files | Find by name below the folder: breadth first, case-insensitive, at most 200 results / 50 000 entries / 12 levels, Stop, links to folders not followed | **automated** (finds a file in a subfolder), **unit-tested** (limits, cancel, symlink loop) |
+| Files | Rename and New folder say why they did nothing (name exists, invalid); open-by-association errors are shown | **automated** (rename, open in Gnumeric) |
+| Calendar | Day view with previous/next/today, two-week agenda, create/edit/delete, all-day events, empty state, unreadable files listed | **automated** (all-day event created with the built-in panel, file checked, opened from Today), **unit-tested** (day overlap, labels, ordering) |
+| Calendar | iCalendar vdir storage, atomic writes, unknown properties kept, export to Documents | **unit-tested** (round trips, folding, escaping, malformed files) |
+| Calendar | Time zones: floating local times for PDA events, UTC/TZID kept and shown local | **unit-tested** with fixed offsets; DST through GLib **unverified** beyond that |
+| Tasks | Create/edit/complete/delete, priority, optional due date, active/completed views, sort order, check box completes in place | **automated** (task due today created, completed from its form, file checked), **unit-tested** (order, summary, round trip) |
+| Today | Calendar: rest of today's events; Tasks: due today / overdue / active counts and urgent tasks; tapping opens the item; file monitors, no polling | **automated** (event and task appear, completing updates Today) |
+| Notes | Search (titles and text), sort by date/title, pin to top (`.pinned`), atomic saves, foreign changes kept, failed saves shown | **automated** (search finds a note typed with the built-in panel), **unit-tested** (search, pins, conflict, atomic save) |
+| Shell | New menu: Event, Task; Programs lists Calendar and Tasks with original icons; any program can be a favorite | **automated** (New > Event, New > Task) |
+
+### POC 0.5 limitations
+
+- **No recurrence, reminders or sync.** Repeating events from other
+  programs show their first date only ("repeats"); alarms are kept in the
+  file but never fire. Sync is possible later through the vdir folders
+  (vdirsyncer), but nothing is set up.
+- **Hold menus in native programs have no accessible names.** GTK 4 does
+  not expose the labels of popover-menu rows over AT-SPI, so the workflow
+  test taps them by position (`pda_ui.py --nth`). A screen reader would not
+  read them either.
+- **Date and time entry** uses GTK's month calendar and spin buttons. They
+  work with the stylus, but the spin buttons' arrows are smaller than the
+  46 px targets elsewhere; judging them needs the panel.
+- **Calendar has no month view**; Agenda shows two weeks.
+- **Find matches names only**, not file contents.
+- **Copy and paste stay inside Files.** The clipboard is not shared with
+  Thunar or other programs.
+- **Files' collision question** applies one answer to every clashing item
+  of a paste.
+- **Today reads every event file** when one changes. That is fine for
+  hundreds of events, but a calendar with years of imported history would
+  need an index.
 
 ## POC 0.4 status (issue #7)
 

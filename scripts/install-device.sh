@@ -54,7 +54,7 @@ if [ "$BUILD" -eq 1 ]; then
     # small boards have.
     runuser -u "$owner" -- bash -c "cd '$REPO' && CARGO_BUILD_JOBS=\${CARGO_BUILD_JOBS:-1} cargo build --release"
 fi
-for b in pda-shell pda-files pda-notes pda-device; do
+for b in pda-shell pda-files pda-notes pda-calendar pda-tasks pda-device; do
     [ -x "$TARGET_DIR/release/$b" ] || { echo "missing $TARGET_DIR/release/$b; build first or drop --no-build" >&2; exit 1; }
 done
 
@@ -73,7 +73,7 @@ USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
 # --- files ------------------------------------------------------------------------
 say "installing into $PREFIX"
 install -d "$PREFIX/bin" "$PREFIX/scripts/bin" "$PREFIX/config" "$PREFIX/assets"
-for b in pda-shell pda-files pda-notes pda-device; do
+for b in pda-shell pda-files pda-notes pda-calendar pda-tasks pda-device; do
     install -m 755 "$TARGET_DIR/release/$b" "$PREFIX/bin/$b"
 done
 install -m 755 "$REPO/scripts/device-session.sh" "$PREFIX/scripts/device-session.sh"

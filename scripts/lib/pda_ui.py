@@ -19,7 +19,9 @@ moves and clicks), the same thing a stylus does:
 
   Options for find/tap/wait/text: --frame RE (only inside windows whose
   title matches), --timeout S (wait up to S seconds, also for find/tap),
-  --pick leftmost|topmost (among all matches, instead of the first).
+  --pick leftmost|topmost (among all matches, instead of the first),
+  --nth N (the Nth match from the top, counting from 1; for GTK 4
+  popover-menu rows, which have no accessible name).
 
 AT-SPI is only used to *find* things on screen (like eyes), never to
 activate them. Key positions come from Onboard's own layout code, fitted to
@@ -37,7 +39,7 @@ import time
 TAP_DELAY = float(os.environ.get("PDA_TAP_DELAY", "0.12"))
 # GTK 4 on X11 reports positions relative to the toplevel window only; the
 # window's own position comes from the X server.
-GTK4_APPS = {"pda-shell", "pda-files", "pda-notes"}
+GTK4_APPS = {"pda-shell", "pda-files", "pda-notes", "pda-calendar", "pda-tasks"}
 
 
 def xdotool(*args):
@@ -140,12 +142,14 @@ def find_all(app_name, role, name_re, limit=1, frame_re=None, objects=False):
     return found
 
 
-def find(app_name, role, name_re, frame_re=None, pick=None):
-    hits = find_all(app_name, role, name_re, limit=1000 if pick else 1, frame_re=frame_re)
+def find(app_name, role, name_re, frame_re=None, pick=None, nth=None):
+    hits = find_all(app_name, role, name_re, limit=1000 if pick or nth else 1, frame_re=frame_re)
     if pick == "leftmost":
         hits.sort(key=lambda h: (h[0], h[1]))
-    elif pick == "topmost":
+    elif pick == "topmost" or nth:
         hits.sort(key=lambda h: (h[1], h[0]))
+    if nth:
+        return hits[int(nth) - 1] if len(hits) >= int(nth) else None
     return hits[0] if hits else None
 
 
@@ -311,7 +315,7 @@ def main():
     opts, args = {}, []
     while rest:
         a = rest.pop(0)
-        if a in ("--frame", "--timeout", "--pick"):
+        if a in ("--frame", "--timeout", "--pick", "--nth"):
             opts[a[2:]] = rest.pop(0)
         else:
             args.append(a)
@@ -335,7 +339,7 @@ def main():
             if cmd == "text":
                 hit = text_of(app, role, name, opts.get("frame"))
             else:
-                hit = find(app, role, name, opts.get("frame"), opts.get("pick"))
+                hit = find(app, role, name, opts.get("frame"), opts.get("pick"), opts.get("nth"))
             if hit is not None or time.time() >= deadline:
                 break
             time.sleep(0.3)
