@@ -3,13 +3,22 @@
 //! user is working on and their favorite programs. Each item is a row with a
 //! large icon at the left, separated by thin lines.
 //!
-//! Calendar, Tasks and Messages have no data source yet; they say so instead
+//! Calendar and Tasks show the user's own local data (POC 0.5): what is
+//! left of today's events, and the tasks due today or overdue. Today reads
+//! the programs' iCalendar folders (`pim`) read-only and follows them with
+//! file monitors, so it never polls them; tapping an entry opens it in
+//! Calendar or Tasks. Messages has no data source yet and says so instead
 //! of showing invented entries. System details are in Settings → About.
 //!
 //! The Today window is the desktop surface below all application windows,
 //! so it also hosts the other shell screens (Programs, Settings) in a stack.
 
+mod pim;
 pub mod recent;
+
+/// Desktop entries of the programs behind Today's Calendar and Tasks.
+pub const CALENDAR_APP: &str = "pda-calendar.desktop";
+pub const TASKS_APP: &str = "pda-tasks.desktop";
 
 use super::command_bar::{switcher_row, SwitcherEntry};
 use super::programs::Programs;
@@ -42,6 +51,17 @@ pub struct Today {
     running_item: gtk::Box,
     running: gtk::ListBox,
     running_count: std::cell::Cell<usize>,
+    /// Calendar and Tasks: their rows, the data last read and the monitors
+    /// on their folders.
+    agenda: gtk::ListBox,
+    todo: gtk::ListBox,
+    events: RefCell<Vec<crate::pim::events::Event>>,
+    tasks: RefCell<Vec<crate::pim::tasks::Task>>,
+    pim_monitors: RefCell<Vec<gio::FileMonitor>>,
+    /// Which of Calendar and Tasks are installed.
+    installed: RefCell<(bool, bool)>,
+    /// The minute the agenda was last drawn for.
+    pim_minute: std::cell::Cell<i64>,
     /// Documents removed from the list in this session.
     forgotten: std::cell::RefCell<std::collections::HashSet<std::path::PathBuf>>,
 }
@@ -135,8 +155,19 @@ impl Today {
 
         let shortcuts = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-        let calendar = item(cfg, "pda-calendar", "Calendar", &line("No calendar connected"));
-        let tasks = item(cfg, "pda-tasks", "Tasks", &line("No task list connected"));
+        // Compact rows, like the lines they replace.
+        let agenda = list();
+        agenda.remove_css_class("targets");
+        agenda.add_css_class("today-lines");
+        let d = dispatch.clone();
+        agenda.connect_row_activated(move |_, row| d(pim::activate(CALENDAR_APP, row)));
+        let todo = list();
+        todo.remove_css_class("targets");
+        todo.add_css_class("today-lines");
+        let d = dispatch.clone();
+        todo.connect_row_activated(move |_, row| d(pim::activate(TASKS_APP, row)));
+        let calendar = item(cfg, "pda-calendar", "Calendar", &agenda);
+        let tasks = item(cfg, "pda-tasks", "Tasks", &todo);
         let messages = item(cfg, "pda-messages", "Messages", &line("No mail account set up"));
         let documents = item(cfg, "pda-documents", "Documents", &recent);
         let running_item = item(cfg, "pda-windows", "Open programs", &running);
@@ -209,8 +240,17 @@ impl Today {
             running_item,
             running,
             running_count: std::cell::Cell::new(0),
+            agenda,
+            todo,
+            events: Default::default(),
+            tasks: Default::default(),
+            pim_monitors: Default::default(),
+            installed: RefCell::new((true, true)),
+            pim_minute: std::cell::Cell::new(-1),
             forgotten: Default::default(),
         });
+        today.watch_pim();
+        today.reload_pim();
         today.tick();
         let t = Rc::downgrade(&today);
         glib::timeout_add_seconds_local(1, move || match t.upgrade() {
@@ -238,6 +278,60 @@ impl Today {
     pub fn set_apps(&self, apps: &[AppEntry]) {
         self.programs.set_apps(apps);
         self.settings.set_apps(apps);
+        let has = |id: &str| apps.iter().any(|a| a.id == id);
+        *self.installed.borrow_mut() = (has(CALENDAR_APP), has(TASKS_APP));
+        self.draw_pim();
+    }
+
+    /// Follow the Calendar and Tasks folders (created if missing, so that
+    /// the first event or task is noticed).
+    fn watch_pim(self: &Rc<Self>) {
+        let mut monitors = Vec::new();
+        for dir in [crate::pim::calendar_dir(), crate::pim::tasks_dir()] {
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                log::warn!("cannot create {}: {e}", dir.display());
+            }
+            let m = gio::File::for_path(&dir).monitor_directory(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE);
+            match m {
+                Ok(m) => {
+                    let t = Rc::downgrade(self);
+                    m.connect_changed(move |_, _, _, ev| {
+                        // One reload per batch of writes.
+                        if ev == gio::FileMonitorEvent::ChangesDoneHint
+                            || ev == gio::FileMonitorEvent::Deleted
+                            || ev == gio::FileMonitorEvent::MovedIn
+                            || ev == gio::FileMonitorEvent::Renamed
+                        {
+                            if let Some(t) = t.upgrade() {
+                                t.reload_pim();
+                            }
+                        }
+                    });
+                    monitors.push(m);
+                }
+                Err(e) => log::warn!("cannot watch {}: {e}", dir.display()),
+            }
+        }
+        *self.pim_monitors.borrow_mut() = monitors;
+    }
+
+    /// Read the events and tasks again (after a change on disk).
+    pub fn reload_pim(&self) {
+        let (events, bad_events) = crate::pim::events::load(&crate::pim::calendar_dir());
+        let (tasks, bad_tasks) = crate::pim::tasks::load(&crate::pim::tasks_dir());
+        for b in bad_events.iter().chain(&bad_tasks) {
+            log::warn!("Today: cannot read {}: {}", b.path.display(), b.why);
+        }
+        *self.events.borrow_mut() = events;
+        *self.tasks.borrow_mut() = tasks;
+        self.draw_pim();
+    }
+
+    fn draw_pim(&self) {
+        let (calendar, tasks) = *self.installed.borrow();
+        let px = self.cfg.design.icon_px;
+        pim::fill_agenda(&self.agenda, &self.events.borrow(), calendar, px);
+        pim::fill_tasks(&self.todo, &self.tasks.borrow(), tasks, px);
     }
 
     fn tick(&self) {
@@ -249,6 +343,11 @@ impl Today {
             }
         }
         self.update_summary(&now);
+        // Events that are over leave the list; the date changes at midnight.
+        let minute = now.to_unix() / 60;
+        if self.pim_minute.replace(minute) != minute {
+            self.draw_pim();
+        }
     }
 
     fn update_summary(&self, now: &glib::DateTime) {

@@ -39,6 +39,15 @@ focus, and arrows for dialogs larger than the screen. Board, panel and pen
 results are still to come
 ([docs/device-checklist.md](docs/device-checklist.md)).
 
+POC 0.5 (issue #8): a native Pocket PC suite next to the Linux programs.
+**Files 2.0** (selection mode, copy/cut/paste with collision choices and
+progress, properties, find by name), **Calendar** (day view, agenda,
+all-day and timed events) and **Tasks** (due dates, priorities, active and
+completed lists) stored locally as iCalendar files, **Notes 2.0** (search,
+sorting, pinning, atomic saves), and Today showing the real events and
+tasks. Storage and time zone rules: [docs/pim.md](docs/pim.md). Not tried on
+the panel yet; that is part of POC 0.6 (#12).
+
 POC 0.2: real desktop programs (Thunar, Gnumeric, Mousepad, Atril, Firefox
 ESR) are edited, saved and reopened **with the pointer and the on-screen
 keyboard only**, in both orientations, by an automated end-to-end test.
@@ -176,7 +185,10 @@ src/
   shell/      state machine (state.rs), layout.rs, shortcuts.rs, controller (mod.rs)
   ui/         status_bar/, command_bar/ (menus.rs: program menus), today/, start_menu/,
               programs.rs, settings/, sip.rs (input panel), escape.rs, shared widgets + CSS
-  native/     first-party programs: files.rs, notes.rs (binaries in src/bin/)
+  native/     first-party programs: files.rs (+ fileops.rs), notes.rs, calendar.rs, tasks.rs,
+              forms.rs (shared edit-form widgets); binaries in src/bin/
+  pim/        events and tasks without GTK: iCalendar reader/writer (ical.rs), dates
+              (date.rs), events.rs, tasks.rs, vdir storage (mod.rs)
   apps/       desktop entries, search, launching
   input/      gesture recognizer (gesture.rs) + GTK long-press feedback
   keyboard/   Onboard control
@@ -195,7 +207,7 @@ config/       pda-shell.toml, openbox/rc.xml, home/ (session HOME defaults),
 assets/       icons/ (the shell's original icon set), sample-files/ (documents copied
               into the session HOME)
 docs/         architecture, hardware, UX principles, ergonomics, test results,
-              screenshots, known limitations
+              screenshots, known limitations, pim (Calendar/Tasks/Notes data)
 tests/        usability_flow.rs
 screenshots/  captured from the running implementation
 ```

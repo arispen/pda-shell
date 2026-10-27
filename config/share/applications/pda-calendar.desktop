@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Calendar
+GenericName=Calendar
+Comment=Appointments and events, stored on this device
+Exec=pda-calendar %F
+Icon=pda-app-calendar
+Terminal=false
+Categories=Office;Calendar;
+Keywords=appointment;event;agenda;schedule;
+StartupWMClass=pda-calendar
+Actions=new-event;
+
+[Desktop Action new-event]
+Name=New event
+Exec=pda-calendar --new

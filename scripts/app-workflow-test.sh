@@ -12,7 +12,9 @@
 # Gnumeric edit/save -> Mousepad edit/save -> switcher -> back to Gnumeric ->
 # Atril PDF -> Firefox page and form -> full screen and back -> Today, then
 # reopen both documents, context menus near the edges, the native Notes and
-# Files with the built-in input panel (POC 0.3, P2), and End session with
+# Files with the built-in input panel (POC 0.3, P2), Files 2.0 (copy, move,
+# rename, find, properties), Calendar, Tasks and Today, Notes search (issue
+# #8), and End session with
 # unsaved work (which must not be discarded silently).
 #
 #   ./scripts/app-workflow-test.sh                         # both orientations
@@ -68,6 +70,29 @@ bar_item() { ui tap pda-shell "list item" "$1" --frame "command bar" --timeout 5
 # A key of the built-in input panel (labels follow Shift).
 sip() { local k; for k in "$@"; do ui tap pda-shell button "^($k|${k^^})\$" --frame "^Input panel$" --timeout 3 >/dev/null || note "no key $k"; done; }
 tap() { xdotool mousemove "$1" "$2"; sleep 0.1; xdotool click 1; sleep 0.2; }
+# Hold the stylus on a row of Files, then tap a row of its menu. GTK 4
+# popover-menu rows have no accessible name, so they are tapped by position
+# in the menu's known order (src/native/files.rs, Files::item_menu).
+calendar_title_is() { [ "$(ui text pda-calendar text '^Title$')" = "$1" ]; }
+FILE_MENU=(Open Select Cut Copy Rename Delete Properties)
+FOLDER_MENU=(Open Select Cut Copy Paste Rename Delete Properties)
+files_hold() {
+    local x y w h try
+    # The list may still be redrawing after a change: retry once.
+    for try in 1 2; do
+        sleep 0.5
+        read -r x y w h <<< "$(ui find pda-files "list item" "$1" --timeout 5)" || { note "no row $1"; return; }
+        ui long-press $((x + w / 3)) $((y + h / 2)) 900
+        wait_n 20 found pda-files "menu item" "" && return
+        tap $((W / 2)) $((TOP / 2))
+    done
+    note "no menu for $1"
+}
+files_menu() {
+    local want="$1" i=1 m; shift
+    for m in "$@"; do [ "$m" = "$want" ] && break; i=$((i + 1)); done
+    ui tap pda-files "menu item" "" --nth "$i" --timeout 3 >/dev/null || note "no menu row $want"
+}
 
 active() { xprop -root _NET_ACTIVE_WINDOW 2>/dev/null | sed -n 's/.*window id # //p'; }
 clients() { xprop -root _NET_CLIENT_LIST 2>/dev/null | sed -n 's/.*window id # //p' | tr -d ','; }
@@ -468,6 +493,152 @@ run_orientation() {
     shot 18-files-notes-folder
     ui tap pda-files button "^Up$" >/dev/null
     check "Up returns to Documents" wait_n 50 found pda-files "list item" "^Budget 2026.xlsx$"
+
+    # --- Files 2.0 (issue #8): folder, copy, rename, open, move, find -------
+    bar "Input panel choice"; sleep 0.5
+    bar_item "^Pocket PC keyboard$"
+    bar "^File$"; sleep 0.5; bar_item "^New folder$"
+    check "Files asks for the new folder's name" wait_n 30 found pda-files button "^Create$"
+    bar "keyboard"; wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
+    sip k i t
+    bar "keyboard"
+    ui tap pda-files button "^Create$" >/dev/null
+    check "folder kit created on disk" wait_for test -d "$docs/kit"
+    files_hold "^budget.csv$"; files_menu Copy "${FILE_MENU[@]}"
+    files_hold "^kit$"; files_menu Paste "${FOLDER_MENU[@]}"
+    check "Copy, then Paste into folder: budget.csv copied into kit" wait_for cmp -s "$docs/budget.csv" "$docs/kit/budget.csv"
+    check "the original stays" test -f "$docs/budget.csv"
+    ui tap pda-files "list item" "^kit$" >/dev/null
+    wait_n 50 found pda-files "list item" "^budget.csv$"
+    bar "^Edit$"; sleep 0.5; bar_item "^Paste$"
+    check "pasting an existing name asks (Replace / Keep both / Skip)" wait_n 30 found pda-files button "^Keep both$"
+    shot 20-files-collision
+    ui tap pda-files button "^Keep both$" >/dev/null
+    check "Keep both writes budget 2.csv, budget.csv untouched" wait_for test -f "$docs/kit/budget 2.csv"
+    files_hold "^budget 2.csv$"; files_menu Rename "${FILE_MENU[@]}"
+    check "Rename asks for the name" wait_n 30 found pda-files button "^Rename$"
+    bar "keyboard"; wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
+    sip q 4 '\.' c s v
+    bar "keyboard"
+    ui tap pda-files button "^Rename$" >/dev/null
+    check "renamed to q4.csv on disk" wait_for test -f "$docs/kit/q4.csv"
+    check "the old name is gone" test ! -e "$docs/kit/budget 2.csv"
+    ui tap pda-files "list item" "^q4.csv$" >/dev/null
+    check "q4.csv opens in Gnumeric (file association)" wait_long has_class Gnumeric
+    sleep 1; bar "^Close$"
+    check "Gnumeric closes (nothing changed)" wait_long no_class Gnumeric
+    wait_for is_active_class pda-files
+    bar "^Edit$"; sleep 0.5; bar_item "^Select$"
+    check "selection mode: Done in the command bar" wait_n 30 found pda-shell button "^Done$" --frame "command bar"
+    ui tap pda-files "list item" "^q4.csv$" >/dev/null
+    ui tap pda-files "list item" "^budget.csv$" >/dev/null
+    check "two items selected" wait_n 30 found pda-files label "^2 items selected$"
+    shot 21-files-selection
+    bar "^Edit$"; sleep 0.5; bar_item "^Cut$"
+    ui tap pda-files button "^Up$" >/dev/null; sleep 0.5
+    ui tap pda-files "list item" "^Projects$" >/dev/null; sleep 0.5
+    bar "^Edit$"; sleep 0.5; bar_item "^Paste$"
+    check "Cut and Paste moved q4.csv into Projects" wait_for test -f "$docs/Projects/q4.csv"
+    check "and budget.csv" test -f "$docs/Projects/budget.csv"
+    check "kit is empty after the move" bash -c "[ -z \"\$(ls -A '$docs/kit')\" ]"
+    files_hold "^q4.csv$"; files_menu Properties "${FILE_MENU[@]}"
+    check "Properties shows the size" wait_n 30 found pda-files label "^85 B \\(85 bytes\\)$"
+    shot 22-files-properties
+    bar "^Done$"
+    bar "^Go$"; sleep 0.5; bar_item "^Documents$"; sleep 0.5
+    bar "^File$"; sleep 0.5; bar_item "^Find"
+    check "Find opens" wait_n 30 found pda-files button "^Find$"
+    bar "keyboard"; wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
+    sip q 4
+    bar "keyboard"
+    ui tap pda-files button "^Find$" >/dev/null
+    check "Find lists q4.csv from a subfolder" wait_n 50 found pda-files "list item" "^q4.csv$"
+    check "Find says how many it found" wait_n 30 found pda-files label "^[0-9]+ found in"
+    shot 23-files-find
+    bar "^Done$"
+
+    # --- Calendar, Tasks, Today, Notes search (issue #8) --------------------
+    bar "^Today$"; wait_for showing_desktop 1
+    local cal="$home/.local/share/pda-shell/calendar"; local todo="$home/.local/share/pda-shell/tasks"
+    check "Today: Calendar says there is nothing today" wait_n 50 found pda-shell "list item" "^No events today$" --frame "^Today$"
+    check "Today: Tasks says there is nothing to do" found pda-shell "list item" "^No active tasks$" --frame "^Today$"
+    bar "Input panel choice"; sleep 0.5
+    bar_item "^Pocket PC keyboard$"
+    # 1. Event for today.
+    bar "^New$"; sleep 0.5; bar_item "^Event$"
+    check "New > Event opens Calendar's form" wait_long found pda-calendar "check box" "^All day$"
+    check "Calendar's form has Done in the command bar" wait_n 50 found pda-shell button "^Done$" --frame "command bar"
+    bar "keyboard"; wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
+    sip l u n c h
+    bar "keyboard"
+    ui tap pda-calendar "check box" "^All day$" >/dev/null
+    shot c1-event-form
+    bar "^Done$"
+    check "event stored as iCalendar" wait_for bash -c "grep -q '^SUMMARY:lunch' '$cal'/*.ics"
+    check "all-day event for today on disk" bash -c "grep -q \"^DTSTART;VALUE=DATE:$(date +%Y%m%d)\" '$cal'/*.ics"
+    check "Calendar lists it on today's page" wait_n 50 found pda-calendar "list item" "^lunch$"
+    shot c2-day
+    bar "^Today$"; wait_for showing_desktop 1
+    check "Today shows the event" wait_n 50 found pda-shell "list item" "^lunch, All day$" --frame "^Today$"
+    shot c3-today-event
+    # 2. Task due today, then complete it.
+    bar "^New$"; sleep 0.5; bar_item "^Task$"
+    check "New > Task opens Tasks' form" wait_long found pda-tasks "check box" "^Due date$"
+    bar "keyboard"; wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
+    sip c a l l space b o b
+    bar "keyboard"
+    ui tap pda-tasks "check box" "^Due date$" >/dev/null
+    ui tap pda-tasks "toggle button" "^High$" >/dev/null
+    shot t1-task-form
+    bar "^Done$"
+    check "task stored as VTODO" wait_for bash -c "grep -q '^SUMMARY:call bob' '$todo'/*.ics"
+    check "task due today on disk" bash -c "grep -q \"^DUE;VALUE=DATE:$(date +%Y%m%d)\" '$todo'/*.ics"
+    check "high priority on disk" bash -c "grep -q '^PRIORITY:1' '$todo'/*.ics"
+    check "Tasks lists it" wait_n 50 found pda-tasks "list item" "^call bob$"
+    shot t2-list
+    bar "^Today$"; wait_for showing_desktop 1
+    check "Today: 1 due today · 1 active" wait_n 50 found pda-shell "list item" "^1 due today · 1 active$" --frame "^Today$"
+    shot t3-today-task
+    ui tap pda-shell "list item" "^call bob" --frame "^Today$" >/dev/null
+    check "tapping the task on Today opens it in Tasks" wait_long found pda-tasks "check box" "^Completed$"
+    ui tap pda-tasks "check box" "^Completed$" >/dev/null
+    bar "^Done$"
+    check "task completed on disk" wait_for bash -c "grep -q '^STATUS:COMPLETED' '$todo'/*.ics"
+    bar "^Today$"; wait_for showing_desktop 1
+    check "Today: no active tasks after completing" wait_n 50 found pda-shell "list item" "^No active tasks$" --frame "^Today$"
+    ui tap pda-shell "list item" "^lunch, All day$" --frame "^Today$" >/dev/null
+    check "tapping the event on Today opens it in Calendar" wait_long calendar_title_is lunch
+    bar "^Cancel$"
+    # 3. Notes search.
+    bar "^Today$"; wait_for showing_desktop 1
+    bar "^New$"; sleep 0.5; bar_item "^Note$"
+    check "Notes opens" wait_long has_class pda-notes
+    bar "keyboard"; wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
+    sip b u y space m i l k
+    bar "keyboard"
+    bar "^Done$"
+    check "note on disk" wait_for bash -c "grep -qx 'buy milk' '$docs'/Notes/*.txt"
+    ui tap pda-notes text "^Search notes$" >/dev/null
+    bar "keyboard"; wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
+    sip m i l
+    bar "keyboard"
+    check "search finds the note" wait_n 50 found pda-notes "list item" "^buy milk$"
+    shot n1-search
+    bar "^Close$"; wait_long no_class pda-notes
+    bar "^Today$"; wait_for showing_desktop 1
+    bar "^New$"; sleep 0.5; bar_item "^Note$"
+    wait_long has_class pda-notes; bar "^Done$"
+    check "reopened Notes lists the note" wait_n 50 found pda-notes "list item" "^buy milk$"
+    # An event left half-done is kept when the session ends (step 5).
+    bar "^Today$"; wait_for showing_desktop 1
+    bar "^New$"; sleep 0.5; bar_item "^Event$"
+    wait_long found pda-calendar "check box" "^All day$"
+    bar "keyboard"; wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
+    sip d r a f t
+    bar "keyboard"
+    shot 24-calendar-draft
+    bar "Input panel choice"; sleep 0.5
+    bar_item "^Full keyboard"
     bar "^Windows"; wait_for has_popup
     check "native and Linux programs share the switcher" found pda-shell "list item" "Notes" --frame "command bar"
     ui tap pda-shell "list item" "Notes" --frame "command bar" >/dev/null
@@ -485,7 +656,8 @@ run_orientation() {
     sleep 0.5
     ui tap pda-shell "list item" "^End session$" --frame "^Start$" >/dev/null
     check "Mousepad asks before discarding unsaved changes" wait_n 100 found mousepad button "^Don't Save$"
-    check "Notes and Files closed without asking (Notes saves by itself)" wait_n 100 bash -c "! xdotool search --classname 'pda-(notes|files)' >/dev/null 2>&1"
+    check "Notes, Files, Calendar and Tasks closed without asking" wait_n 100 bash -c "! xdotool search --classname 'pda-(notes|files|calendar|tasks)' >/dev/null 2>&1"
+    check "the event left in its form was kept on exit" bash -c "grep -q '^SUMMARY:draft' '$cal'/*.ics"
     check "session is still running while the question is open" kill -0 "$session"
     shot 15-end-session-unsaved
     ui tap mousepad button "^Don't Save$" >/dev/null

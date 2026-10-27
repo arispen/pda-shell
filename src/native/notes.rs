@@ -4,16 +4,25 @@
 //!
 //! Like Pocket PC Notes there is no Save: the note is written while typing
 //! (after a short pause), on Done and when the program closes. An empty new
-//! note is not kept.
+//! note is not kept. Writes are atomic (temporary file, then rename). If
+//! another program changed the file since it was opened, the edits are kept
+//! as a new note instead of overwriting the other program's version; a
+//! failed write is shown, and the text stays in the editor.
 //!
-//! Command bar menus: list: New, Tools; editor: Done, Edit, Tools.
+//! The list has a search field (titles and text), sorting by date or title,
+//! and pinned notes on top. Pins are file names in `.pinned` in the notes
+//! folder, so the notes themselves stay plain .txt files.
+//!
+//! Command bar menus: list: New, View; editor: Done, Edit, Tools.
+//! `pda-notes [--new] [NOTE.txt]`.
 
-use super::{action, short_time, AskBar, NativeWindow};
+use super::{action, menu, short_time, AskBar, NativeWindow};
 use crate::config::Config;
 use crate::ui::MenuItem;
 use gtk::gio;
 use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -27,6 +36,93 @@ pub struct NoteInfo {
     pub path: PathBuf,
     pub title: String,
     pub modified: i64,
+    /// The whole text, for searching.
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sort {
+    /// Newest first.
+    Date,
+    Title,
+}
+
+/// Whether `note` matches every word of `query` (title or text, any case).
+pub fn matches(note: &NoteInfo, query: &str) -> bool {
+    let hay = note.text.to_lowercase();
+    query.split_whitespace().all(|w| hay.contains(&w.to_lowercase()))
+}
+
+/// The first line of the text (after the title line) containing the first
+/// word of `query`: what the list shows under a found note.
+pub fn snippet(text: &str, query: &str) -> Option<String> {
+    let w = query.split_whitespace().next()?.to_lowercase();
+    let line = text.lines().map(str::trim).find(|l| l.to_lowercase().contains(&w))?;
+    let mut s: String = line.chars().take(60).collect();
+    if line.chars().count() > 60 {
+        s.push('…');
+    }
+    Some(s)
+}
+
+/// Pinned notes first, then by `sort`.
+pub fn sort_notes(notes: &mut [NoteInfo], pinned: &BTreeSet<String>, sort: Sort) {
+    let pin = |n: &NoteInfo| !pinned.contains(&file_name(&n.path));
+    notes.sort_by(|a, b| {
+        pin(a).cmp(&pin(b)).then_with(|| match sort {
+            Sort::Date => b.modified.cmp(&a.modified),
+            Sort::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
+        })
+        .then_with(|| a.path.cmp(&b.path))
+    });
+}
+
+fn file_name(p: &Path) -> String {
+    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+const PINS: &str = ".pinned";
+
+/// File names of the pinned notes in `dir` (that still exist).
+pub fn read_pins(dir: &Path) -> BTreeSet<String> {
+    std::fs::read_to_string(dir.join(PINS))
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && dir.join(l).is_file())
+        .map(String::from)
+        .collect()
+}
+
+pub fn write_pins(dir: &Path, pins: &BTreeSet<String>) -> std::io::Result<()> {
+    let text: String = pins.iter().map(|p| format!("{p}\n")).collect();
+    crate::pim::write_atomic(&dir.join(PINS), &text)
+}
+
+/// Modification time of a file in seconds (0 if it does not exist).
+fn mtime(p: &Path) -> i64 {
+    std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos() as i64)
+}
+
+/// Save `text` as the note `path`. `seen` is the file's modification time
+/// when it was opened or last saved by Notes (0 for a new note). If the file
+/// changed since (another program), the text goes to a new note next to it.
+/// Returns where the text went and its new modification time.
+pub fn save_note(path: &Path, text: &str, seen: i64) -> std::io::Result<(PathBuf, i64)> {
+    let now = mtime(path);
+    let target = if now != 0 && now != seen {
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        dir.join(super::fileops::free_name(dir, &format!("{stem} (edited here).txt")))
+    } else {
+        path.to_path_buf()
+    };
+    crate::pim::write_atomic(&target, text)?;
+    Ok((target.clone(), mtime(&target)))
 }
 
 /// The title of a note: its first non-empty line, shortened.
@@ -61,7 +157,7 @@ pub fn list_notes(dir: &Path) -> Vec<NoteInfo> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs() as i64);
             let text = std::fs::read_to_string(e.path()).unwrap_or_default();
-            Some(NoteInfo { path: e.path(), title: note_title(&text), modified })
+            Some(NoteInfo { path: e.path(), title: note_title(&text), modified, text })
         })
         .collect();
     notes.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.path.cmp(&b.path)));
@@ -80,6 +176,11 @@ struct Notes {
     stack: gtk::Stack,
     list: gtk::ListBox,
     empty: gtk::Label,
+    search: gtk::SearchEntry,
+    sort: Cell<Sort>,
+    pins: RefCell<BTreeSet<String>>,
+    /// The note file's modification time when Notes last read or wrote it.
+    seen: Cell<i64>,
     view: gtk::TextView,
     ask: AskBar,
     menubar: gio::Menu,
@@ -103,19 +204,19 @@ pub fn main() -> glib::ExitCode {
             n.show_list();
             n
         });
+        let file = args
+            .iter()
+            .find(|a| !a.starts_with("--"))
+            .map(|a| if a.contains("://") { gio::File::for_uri(a) } else { gio::File::for_commandline_arg(a) })
+            .and_then(|f| f.path())
+            .filter(|p| p.is_file());
         if args.iter().any(|a| a == "--new") {
             notes.new_note();
+        } else if let Some(path) = file {
+            notes.open(path);
         }
         notes.win.window.present();
     })
-}
-
-fn menu(items: &[(&str, &str)]) -> gio::Menu {
-    let m = gio::Menu::new();
-    for (label, action) in items {
-        m.append(Some(label), Some(action));
-    }
-    m
 }
 
 impl Notes {
@@ -136,6 +237,10 @@ impl Notes {
         empty.add_css_class("dim");
         empty.add_css_class("page-note");
         empty.set_xalign(0.0);
+        let search = gtk::SearchEntry::new();
+        search.set_placeholder_text(Some("Search notes"));
+        search.update_property(&[gtk::accessible::Property::Label("Search notes")]);
+        search.add_css_class("notes-search");
         let list_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
         list_page.append(&list);
         list_page.append(&empty);
@@ -159,7 +264,13 @@ impl Notes {
             .build();
 
         let stack = gtk::Stack::new();
-        stack.add_named(&list_scroll, Some("list"));
+        let list_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let search_bar = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        search_bar.add_css_class("ask-bar");
+        search_bar.append(&search);
+        list_box.append(&search_bar);
+        list_box.append(&list_scroll);
+        stack.add_named(&list_box, Some("list"));
         stack.add_named(&editor, Some("editor"));
         let ask = AskBar::new();
         let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -185,6 +296,17 @@ impl Notes {
                     log::error!("cannot open {uri}: {e}");
                 }
             });
+            let sort = gio::SimpleAction::new_stateful("sort", Some(glib::VariantTy::STRING), &"date".to_variant());
+            let n = weak.clone();
+            sort.connect_change_state(move |a, v| {
+                let Some(value) = v.and_then(|v| v.get::<String>()) else { return };
+                a.set_state(&value.to_variant());
+                if let Some(n) = n.upgrade() {
+                    n.sort.set(if value == "title" { Sort::Title } else { Sort::Date });
+                    n.refresh_list();
+                }
+            });
+            w.add_action(&sort);
             let n = weak.clone();
             action(w, "done", move || {
                 if let Some(n) = n.upgrade() {
@@ -247,6 +369,10 @@ impl Notes {
                 stack,
                 list,
                 empty,
+                search,
+                sort: Cell::new(Sort::Date),
+                pins: RefCell::new(read_pins(&dir)),
+                seen: Cell::new(0),
                 view,
                 ask,
                 menubar,
@@ -264,6 +390,12 @@ impl Notes {
             }
         });
         let n = Rc::downgrade(&notes);
+        notes.search.connect_search_changed(move |_| {
+            if let Some(n) = n.upgrade() {
+                n.refresh_list();
+            }
+        });
+        let n = Rc::downgrade(&notes);
         notes.view.buffer().connect_changed(move |_| {
             if let Some(n) = n.upgrade() {
                 n.dirty.set(true);
@@ -272,10 +404,11 @@ impl Notes {
         });
         let n = Rc::downgrade(&notes);
         notes.win.window.connect_close_request(move |_| {
-            if let Some(n) = n.upgrade() {
-                n.finish_current();
+            // A note that could not be saved keeps the window open.
+            match n.upgrade() {
+                Some(n) if !n.finish_current() => glib::Propagation::Stop,
+                _ => glib::Propagation::Proceed,
             }
-            glib::Propagation::Proceed
         });
         notes
     }
@@ -302,7 +435,16 @@ impl Notes {
             );
         } else {
             self.menubar.append(Some("New"), Some("app.new"));
-            self.menubar.append_submenu(Some("Tools"), &menu(&[("Notes folder", "app.show-folder")]));
+            let view = gio::Menu::new();
+            let sort = gio::Menu::new();
+            for (label, value) in [("Sort by date", "date"), ("Sort by title", "title")] {
+                let item = gio::MenuItem::new(Some(label), None);
+                item.set_action_and_target_value(Some("win.sort"), Some(&value.to_variant()));
+                sort.append_item(&item);
+            }
+            view.append_section(None, &sort);
+            view.append_section(None, &menu(&[("Notes folder", "app.show-folder")]));
+            self.menubar.append_submenu(Some("View"), &view);
         }
         for a in &self.edit_actions {
             a.set_enabled(editing);
@@ -311,9 +453,24 @@ impl Notes {
 
     fn refresh_list(&self) {
         self.list.remove_all();
-        let notes = list_notes(&self.dir);
-        self.empty.set_visible(notes.is_empty());
+        let mut notes = list_notes(&self.dir);
+        let total = notes.len();
+        *self.pins.borrow_mut() = read_pins(&self.dir);
+        let query = self.search.text().trim().to_string();
+        notes.retain(|n| query.is_empty() || matches(n, &query));
+        sort_notes(&mut notes, &self.pins.borrow(), self.sort.get());
+        self.empty.set_text(&if total == 0 {
+            "No notes yet. Tap New to write one.".to_string()
+        } else if notes.is_empty() {
+            format!("No note contains “{query}”.")
+        } else if !query.is_empty() {
+            format!("{} of {total} notes", notes.len())
+        } else {
+            String::new()
+        });
+        self.empty.set_visible(!self.empty.text().is_empty());
         for note in notes {
+            let pinned = self.pins.borrow().contains(&file_name(&note.path));
             let row = gtk::ListBoxRow::new();
             row.set_widget_name(&note.path.to_string_lossy());
             row.update_property(&[gtk::accessible::Property::Label(&note.title)]);
@@ -323,7 +480,15 @@ impl Notes {
             let t = gtk::Label::new(Some(&note.title));
             t.set_xalign(0.0);
             t.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            let when = gtk::Label::new(Some(&short_time(note.modified)));
+            let mut sub = short_time(note.modified);
+            if pinned {
+                sub = format!("Pinned · {sub}");
+            }
+            if let Some(found) = snippet(&note.text, &query).filter(|_| !query.is_empty()) {
+                sub = format!("{sub} · {found}");
+            }
+            let when = gtk::Label::new(Some(&sub));
+            when.set_ellipsize(gtk::pango::EllipsizeMode::End);
             when.add_css_class("dim");
             when.set_xalign(0.0);
             text.append(&t);
@@ -334,10 +499,16 @@ impl Notes {
             let n = NOTES.with(|n| n.borrow().as_ref().map(Rc::downgrade));
             crate::ui::context_menu(&row, &self.win.feedback, &self.cfg, move || {
                 let (p1, p2, n1, n2) = (path.clone(), path.clone(), n.clone(), n.clone());
+                let (p3, n3) = (path.clone(), n.clone());
                 vec![
                     MenuItem::new("Open", move || {
                         if let Some(n) = n1.as_ref().and_then(|w| w.upgrade()) {
                             n.open(p1.clone());
+                        }
+                    }),
+                    MenuItem::new(if pinned { "Unpin" } else { "Pin to top" }, move || {
+                        if let Some(n) = n3.as_ref().and_then(|w| w.upgrade()) {
+                            n.toggle_pin(&p3);
                         }
                     }),
                     MenuItem::new("Delete", move || {
@@ -351,8 +522,22 @@ impl Notes {
         }
     }
 
+    fn toggle_pin(&self, path: &Path) {
+        let name = file_name(path);
+        let mut pins = read_pins(&self.dir);
+        if !pins.remove(&name) {
+            pins.insert(name);
+        }
+        if let Err(e) = write_pins(&self.dir, &pins) {
+            self.ask.tell(&format!("Cannot pin the note: {e}"));
+        }
+        self.refresh_list();
+    }
+
     fn show_list(&self) {
-        self.finish_current();
+        if !self.finish_current() {
+            return;
+        }
         self.refresh_list();
         self.stack.set_visible_child_name("list");
         self.win.window.set_title(Some("Notes"));
@@ -360,8 +545,17 @@ impl Notes {
     }
 
     fn open(&self, path: PathBuf) {
-        self.finish_current();
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        if !self.finish_current() {
+            return;
+        }
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                self.ask.tell(&format!("Cannot open “{}”: {e}", file_name(&path)));
+                return;
+            }
+        };
+        self.seen.set(mtime(&path));
         self.edit(path, &text);
     }
 
@@ -380,14 +574,17 @@ impl Notes {
     }
 
     fn new_note(&self) {
-        self.finish_current();
+        if !self.finish_current() {
+            return;
+        }
         let stamp = glib::DateTime::now_local()
             .ok()
             .and_then(|t| t.format("%Y-%m-%d %H.%M.%S").ok())
             .map(|s| s.to_string())
             .unwrap_or_else(|| "new".into());
-        let path = self.dir.join(note_file_name(&stamp));
-        self.edit(path, "");
+        let name = super::fileops::free_name(&self.dir, &note_file_name(&stamp));
+        self.seen.set(0);
+        self.edit(self.dir.join(name), "");
     }
 
     fn schedule_save(&self) {
@@ -421,24 +618,41 @@ impl Notes {
         if text.trim().is_empty() && !path.exists() {
             return;
         }
-        match std::fs::write(&path, &text) {
-            Ok(()) => {
+        match save_note(&path, &text, self.seen.get()) {
+            Ok((saved, seen)) => {
                 self.dirty.set(false);
+                self.seen.set(seen);
                 self.win.window.set_title(Some(&note_title(&text)));
-                log::info!("saved {}", path.display());
+                log::info!("saved {}", saved.display());
+                if saved != path {
+                    // From now on this note is the copy.
+                    *self.current.borrow_mut() = Some(saved.clone());
+                    self.ask.tell(&format!(
+                        "Another program changed this note. Your text was saved as “{}”.",
+                        file_name(&saved)
+                    ));
+                }
             }
-            Err(e) => log::error!("cannot save {}: {e}", path.display()),
+            Err(e) => {
+                log::error!("cannot save {}: {e}", path.display());
+                self.ask.tell(&format!("Cannot save the note: {e}. The text is still here; try again with Done."));
+            }
         }
     }
 
     /// Save the note being edited and leave it; an emptied note is removed.
-    fn finish_current(&self) {
+    /// False (and the note stays open) if it could not be saved.
+    fn finish_current(&self) -> bool {
         self.save();
+        if self.dirty.get() && self.current.borrow().is_some() {
+            return false;
+        }
         if let Some(path) = self.current.borrow_mut().take() {
             if self.text().trim().is_empty() && path.exists() {
                 let _ = std::fs::remove_file(&path);
             }
         }
+        true
     }
 
     fn ask_delete(&self, path: PathBuf) {
@@ -482,6 +696,60 @@ mod tests {
         std::fs::write(dir.join("ignored.md"), "x").unwrap();
         let titles: Vec<String> = list_notes(&dir).into_iter().map(|n| n.title).collect();
         assert_eq!(titles, vec!["Newer", "Older"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn note(name: &str, text: &str, modified: i64) -> NoteInfo {
+        NoteInfo { path: PathBuf::from(format!("/n/{name}")), title: note_title(text), modified, text: text.into() }
+    }
+
+    #[test]
+    fn search_matches_titles_and_text_in_any_case() {
+        let n = note("a.txt", "Shopping\nMilk and Żółw eggs", 1);
+        assert!(matches(&n, "milk"));
+        assert!(matches(&n, "EGGS shopping"));
+        assert!(matches(&n, "żółw"));
+        assert!(!matches(&n, "milk bread"));
+        assert_eq!(snippet(&n.text, "eggs").as_deref(), Some("Milk and Żółw eggs"));
+    }
+
+    #[test]
+    fn pinned_notes_come_first_in_either_order() {
+        let mut v = vec![note("old.txt", "Zebra", 1), note("new.txt", "Apple", 3), note("pin.txt", "Middle", 2)];
+        let pins: BTreeSet<String> = ["pin.txt".to_string()].into();
+        sort_notes(&mut v, &pins, Sort::Date);
+        assert_eq!(v.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), ["Middle", "Apple", "Zebra"]);
+        sort_notes(&mut v, &pins, Sort::Title);
+        assert_eq!(v.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), ["Middle", "Apple", "Zebra"]);
+        sort_notes(&mut v, &BTreeSet::new(), Sort::Title);
+        assert_eq!(v[0].title, "Apple");
+    }
+
+    #[test]
+    fn saving_is_atomic_and_never_overwrites_a_foreign_change() {
+        let dir = std::env::temp_dir().join(format!("pda-notes-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(note_file_name("x"));
+        // A new note.
+        let (saved, seen) = save_note(&path, "one", 0).unwrap();
+        assert_eq!((saved.as_path(), std::fs::read_to_string(&path).unwrap().as_str()), (path.as_path(), "one"));
+        // Saved again by Notes: same file.
+        let (saved, seen) = save_note(&path, "two", seen).unwrap();
+        assert_eq!(saved, path);
+        // Changed by another program meanwhile: Notes' text goes elsewhere.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&path, "theirs").unwrap();
+        let (saved, _) = save_note(&path, "mine", seen).unwrap();
+        assert_ne!(saved, path);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
+        assert_eq!(std::fs::read_to_string(&saved).unwrap(), "mine");
+        // Pins survive, and pins of deleted notes are dropped.
+        let pins: BTreeSet<String> = [file_name(&path), "gone.txt".to_string()].into();
+        write_pins(&dir, &pins).unwrap();
+        assert_eq!(read_pins(&dir), [file_name(&path)].into());
+        // The pin file is not a note.
+        assert!(list_notes(&dir).iter().all(|n| !n.path.ends_with(PINS)));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -9,8 +9,12 @@
 //! it. That is the whole command-bar API: any GtkApplication that sets a
 //! menu bar gets its commands into the bar the same way.
 
+pub mod calendar;
+pub mod fileops;
 pub mod files;
+pub mod forms;
 pub mod notes;
+pub mod tasks;
 
 use crate::config::Config;
 use crate::input::StylusFeedback;
@@ -69,6 +73,9 @@ pub struct AskBar {
     question: gtk::Label,
     entry: gtk::Entry,
     ok: gtk::Button,
+    cancel: gtk::Button,
+    /// Extra answers of `choose`, before Cancel.
+    choices: gtk::Box,
     on_ok: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(String)>>>>,
 }
 
@@ -83,16 +90,19 @@ impl AskBar {
         let entry = gtk::Entry::new();
         let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         buttons.set_halign(gtk::Align::End);
+        buttons.set_homogeneous(false);
         let ok = gtk::Button::with_label("OK");
         let cancel = gtk::Button::with_label("Cancel");
+        let choices = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        buttons.append(&choices);
         buttons.append(&cancel);
         buttons.append(&ok);
         widget.append(&question);
         widget.append(&entry);
         widget.append(&buttons);
-        let bar = Self { widget, question, entry, ok, on_ok: Default::default() };
+        let bar = Self { widget, question, entry, ok, cancel, choices, on_ok: Default::default() };
         let b = bar.clone();
-        cancel.connect_clicked(move |_| b.hide());
+        bar.cancel.connect_clicked(move |_| b.hide());
         let b = bar.clone();
         bar.ok.connect_clicked(move |_| b.accept());
         let b = bar.clone();
@@ -117,12 +127,22 @@ impl AskBar {
         self.on_ok.borrow_mut().take();
     }
 
+    /// Back to the plain layout: question, OK and Cancel.
+    fn reset(&self, question: &str, ok_label: &str) {
+        self.question.set_text(question);
+        while let Some(c) = self.choices.first_child() {
+            self.choices.remove(&c);
+        }
+        self.ok.set_label(ok_label);
+        self.ok.set_visible(true);
+        self.cancel.set_visible(true);
+    }
+
     /// Ask for a name; `on_ok` gets the trimmed, non-empty text.
     pub fn ask_name(&self, question: &str, initial: &str, ok_label: &str, on_ok: impl Fn(String) + 'static) {
-        self.question.set_text(question);
+        self.reset(question, ok_label);
         self.entry.set_visible(true);
         self.entry.set_text(initial);
-        self.ok.set_label(ok_label);
         *self.on_ok.borrow_mut() = Some(Box::new(on_ok));
         self.widget.set_visible(true);
         self.entry.grab_focus();
@@ -131,10 +151,37 @@ impl AskBar {
 
     /// Ask for a confirmation.
     pub fn confirm(&self, question: &str, ok_label: &str, on_ok: impl Fn() + 'static) {
-        self.question.set_text(question);
+        self.reset(question, ok_label);
         self.entry.set_visible(false);
-        self.ok.set_label(ok_label);
         *self.on_ok.borrow_mut() = Some(Box::new(move |_| on_ok()));
+        self.widget.set_visible(true);
+    }
+
+    /// Ask to pick one of `answers` (or Cancel); `on_choice` gets its index.
+    pub fn choose(&self, question: &str, answers: &[&str], on_choice: impl Fn(usize) + 'static) {
+        self.reset(question, "");
+        self.entry.set_visible(false);
+        self.ok.set_visible(false);
+        let on_choice = std::rc::Rc::new(on_choice);
+        for (i, label) in answers.iter().enumerate() {
+            let b = gtk::Button::with_label(label);
+            let (bar, f) = (self.clone(), on_choice.clone());
+            b.connect_clicked(move |_| {
+                bar.hide();
+                f(i);
+            });
+            self.choices.append(&b);
+        }
+        self.on_ok.borrow_mut().take();
+        self.widget.set_visible(true);
+    }
+
+    /// Tell something that went wrong or needs reading; only OK.
+    pub fn tell(&self, message: &str) {
+        self.reset(message, "OK");
+        self.entry.set_visible(false);
+        self.cancel.set_visible(false);
+        *self.on_ok.borrow_mut() = Some(Box::new(|_| {}));
         self.widget.set_visible(true);
     }
 }
@@ -143,6 +190,15 @@ impl Default for AskBar {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// A menu of (label, action) items.
+pub fn menu(items: &[(&str, &str)]) -> gio::Menu {
+    let m = gio::Menu::new();
+    for (label, action) in items {
+        m.append(Some(label), Some(action));
+    }
+    m
 }
 
 /// A plain window action (no parameter).

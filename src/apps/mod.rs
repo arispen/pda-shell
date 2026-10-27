@@ -168,6 +168,14 @@ pub fn launch(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Open a file with an application by desktop entry ID.
+pub fn launch_with(id: &str, path: &std::path::Path) -> Result<(), String> {
+    let info = gio::DesktopAppInfo::new(id).ok_or_else(|| format!("{id} is not installed"))?;
+    info.launch(&[gio::File::for_path(path)], launch_context().as_ref()).map_err(|e| e.to_string())?;
+    log::info!("opened {} with {id}", path.display());
+    Ok(())
+}
+
 /// Launch a desktop action of an application (`[Desktop Action NAME]`),
 /// e.g. Notes' "new-note".
 pub fn launch_action(id: &str, action: &str) -> Result<(), String> {

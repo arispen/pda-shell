@@ -45,6 +45,9 @@ pub enum Command {
     OnboardVisible(bool),
     /// A desktop action of an application (e.g. Notes' new note).
     LaunchAction(String, String),
+    /// Open a file with a given program (an event in Calendar, a task in
+    /// Tasks, a note in Notes); an empty path just starts the program.
+    OpenWith(String, String),
     /// An object in some program got the focus (AT-SPI).
     TextFocus(Focus),
 }
@@ -62,6 +65,7 @@ const KEY_DELAY: Duration = Duration::from_millis(250);
 /// Ids of the shell's native programs (desktop entries).
 pub const NOTES_APP: &str = "pda-notes.desktop";
 pub const FILES_APP: &str = "pda-files.desktop";
+use crate::ui::today::{CALENDAR_APP, TASKS_APP};
 const SPREADSHEET_APP: &str = "org.gnumeric.gnumeric.desktop";
 
 /// The New menu on Today: what can be created with what is installed.
@@ -70,6 +74,12 @@ fn new_items(apps: &[AppEntry]) -> Vec<(String, Command)> {
     let mut items = Vec::new();
     if has(NOTES_APP) {
         items.push(("Note".to_string(), Command::LaunchAction(NOTES_APP.into(), "new-note".into())));
+    }
+    if has(CALENDAR_APP) {
+        items.push(("Event".to_string(), Command::LaunchAction(CALENDAR_APP.into(), "new-event".into())));
+    }
+    if has(TASKS_APP) {
+        items.push(("Task".to_string(), Command::LaunchAction(TASKS_APP.into(), "new-task".into())));
     }
     if has(SPREADSHEET_APP) {
         items.push(("Spreadsheet".to_string(), Command::Shell(Event::Launch(SPREADSHEET_APP.into()))));
@@ -316,7 +326,15 @@ impl Shell {
                 }
             }
             Command::OpenUri(uri) => {
-                if let Err(e) = apps::open_uri(&uri) {
+                // Notes open in Notes, which saves them by itself.
+                let note = gio::File::for_uri(&uri)
+                    .path()
+                    .filter(|p| p.parent() == Some(crate::native::notes::notes_dir().as_path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "txt"))
+                    .filter(|_| self.apps.borrow().iter().any(|a| a.id == NOTES_APP));
+                if let Some(path) = note {
+                    self.dispatch(Command::OpenWith(NOTES_APP.into(), path.to_string_lossy().into_owned()));
+                } else if let Err(e) = apps::open_uri(&uri) {
                     log::error!("cannot open {uri}: {e}");
                 }
             }
@@ -344,6 +362,16 @@ impl Shell {
                 // must not hide the panel now in use.
                 if *self.panel.borrow() == "onboard" {
                     self.handle(Event::KeyboardVisible(v));
+                }
+            }
+            Command::OpenWith(id, path) => {
+                let result = if path.is_empty() {
+                    apps::launch(&id)
+                } else {
+                    apps::launch_with(&id, std::path::Path::new(&path))
+                };
+                if let Err(e) = result {
+                    log::error!("cannot open {path:?} with {id}: {e}");
                 }
             }
             Command::LaunchAction(id, action) => {

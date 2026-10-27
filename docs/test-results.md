@@ -1,3 +1,63 @@
+# POC 0.5 test results: native Files, Calendar, Tasks, Notes (issue #8)
+
+Date: 2026-10-27. Same container (Debian 13 arm64, Xvfb, Openbox, real
+programs), isolated test HOME. **Simulated only; not used on the panel.**
+Screenshots: `screenshots/native-suite/`.
+
+| Test | Command | Result |
+|---|---|---|
+| Unit and integration tests | `cargo test` | 190 + 1 passed |
+| Shell smoke test | `./scripts/smoke-test.sh` | 74 passed, 0 failed |
+| Workflow test, landscape | `./scripts/app-workflow-test.sh --orientation landscape` | 139 passed, 1 failed |
+| Workflow test, portrait | `./scripts/app-workflow-test.sh --orientation portrait` | 127 passed, 11 failed |
+| Same workflow test on `main` (baseline, same container) | | landscape 96 passed, 1 failed; portrait 84 passed, 11 failed |
+
+**The failures are not from this change.** The 12 failing checks fail
+identically on `main` in the current container: in portrait, Gnumeric,
+Atril and Firefox open wider than the 600 px screen (Gnumeric reports a
+626 px minimum), and the steps after that cascade (Atril pages, the Today
+edge long press, the built-in panel's CAP key for the Notes step). In
+landscape, Gnumeric's resize above the docked keyboard fails. POC 0.4
+recorded 192/0 on the same scripts, so something in the container image
+changed since; this needs its own look. All 42 new checks pass in each
+orientation.
+
+New in the workflow test, pointer and on-screen keys only (built-in input
+panel), real files checked on disk:
+
+- **Files**: New folder named with the panel; Copy → hold a folder →
+  Paste into folder; Paste the same file again → Replace / Keep both / Skip
+  → Keep both gives `budget 2.csv`; Rename to `q4.csv`; open it in Gnumeric
+  by association; Edit > Select, two items, Cut, Paste into another folder
+  (both moved, source folder empty); Properties (size); Find "q4" from
+  Documents lists the file in a subfolder.
+- **Calendar and Today**: Today says "No events today" / "No active tasks"
+  on a fresh HOME; New > Event, title typed, All day, Done: one `.ics` with
+  `DTSTART;VALUE=DATE:<today>`; listed on Calendar's day page and on Today;
+  tapping it on Today opens it in Calendar.
+- **Tasks and Today**: New > Task, due today, High: `VTODO` with `DUE` and
+  `PRIORITY:1`; Today shows "1 due today · 1 active" and the task; tapping
+  it opens it in Tasks; Completed + Done writes `STATUS:COMPLETED`, and
+  Today goes back to "No active tasks".
+- **Notes**: a note typed with the panel, found by the search field, still
+  there after closing and reopening Notes.
+- **Exit with an edit in progress**: an event form left open with a title
+  typed is saved when End session closes Calendar; Notes, Files, Calendar
+  and Tasks all close without asking.
+
+Found and fixed while testing:
+
+- Hold menus from a row in the middle of the landscape screen did not fit
+  above or below the stylus, and GTK made them scroll: Files' Properties
+  was hidden below the edge. Long menus now open beside the stylus and use
+  the whole height (`ui::popup_menu`, all hold menus in the shell and the
+  native programs).
+- Today's Calendar and Tasks rows were 46 px targets and pushed the
+  Favorites grid under the command bar in landscape; they are now as tight
+  as the text lines they replaced (the whole row stays tappable).
+- GTK 4 popover-menu rows have no accessible names; the test taps them by
+  position (`pda_ui.py --nth`), see known limitations.
+
 # POC 0.4 test results: landscape input and oversized dialogs (issue #7, P1)
 
 Date: 2026-10-27. Same container (Xvfb, Openbox, real programs). **Not
