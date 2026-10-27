@@ -5,3 +5,4 @@ screenshots/dev/
 screenshots/workflow/
 screenshots/workflow-*/
 __pycache__/
+screenshots/device-test/

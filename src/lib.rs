@@ -2,6 +2,7 @@
 
 pub mod apps;
 pub mod config;
+pub mod device;
 pub mod input;
 pub mod keyboard;
 pub mod native;

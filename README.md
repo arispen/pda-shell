@@ -70,6 +70,24 @@ Useful options: `--headless` (Xvfb, no window), `--release`, `--no-build`.
 with fontconfig (the shell's and the programs' font); rerun it (or
 `./scripts/container.sh build`) after updating from POC 0.2.
 
+## Run it on the device
+
+On a Debian 13 board with the HDMI panel (Orange Pi 3 LTS / Zero 2W),
+without a desktop environment, started at boot:
+
+```bash
+sudo ./scripts/setup-debian.sh --device       # Xorg, libinput, touchscreen tools, programs
+sudo ./scripts/install-device.sh --enable     # build, install to /opt/pda-shell, systemd unit on tty7
+```
+
+Or from a console login: `./scripts/device-session.sh [--orientation portrait] [--mode 800x480]`.
+Screen output, mode and rotation come from `[device]` in the config;
+nothing assumes 1024×600. Board selection, boot configuration and
+troubleshooting: [docs/device-setup.md](docs/device-setup.md); the physical
+test checklist: [docs/device-checklist.md](docs/device-checklist.md).
+`./scripts/device-bench.sh --attach` measures startup, memory, CPU and
+program launch times on the board.
+
 ## Run it on another OS (e.g. macOS)
 
 A Debian 13 container built from the same setup script:
@@ -87,6 +105,8 @@ A Debian 13 container built from the same setup script:
 cargo test                       # unit + integration tests (state machine, layout, config, …)
 ./scripts/smoke-test.sh          # shell behaviour in both orientations (Xvfb + Openbox + real apps)
 ./scripts/app-workflow-test.sh   # real-program workflow, pointer and on-screen keyboard only
+./scripts/device-test.sh         # the device session on Xvfb: 1024x600, 600x1024, 800x480,
+                                 # crash recovery, End session with unsaved work
 ```
 
 The **smoke test** checks the shell itself: struts and work area, Start menu
@@ -146,10 +166,14 @@ src/
   keyboard/   Onboard control
   platform/   neutral window types; x11/ = all X11/EWMH code, XSETTINGS (settings.rs),
               XTEST typing (keys.rs)
+  device/     physical device layer, no GTK: display plan from xrandr (display.rs),
+              system and power facts (system.rs); binary: src/bin/pda-device.rs
 scripts/      setup-debian.sh, dev-session.sh, smoke-test.sh, app-workflow-test.sh,
               capture-screens.sh, capture-profiles.sh, container.sh,
-              make-sample-files.py, bin/pda-onboard, lib/pda_ui.py
-config/       pda-shell.toml, openbox/rc.xml, home/ (session HOME defaults)
+              make-sample-files.py, bin/pda-onboard, lib/pda_ui.py;
+              device: device-session.sh, install-device.sh, device-test.sh, device-bench.sh
+config/       pda-shell.toml, openbox/rc.xml, home/ (session HOME defaults),
+              device/ (systemd unit)
 assets/       icons/ (the shell's original icon set), sample-files/ (documents copied
               into the session HOME)
 docs/         architecture, hardware, UX principles, ergonomics, test results,

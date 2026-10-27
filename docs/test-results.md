@@ -1,3 +1,58 @@
+# POC 0.4 test results: device session (issue #7)
+
+Date: 2026-10-27. Environment: the Debian 13 arm64 development container
+on an Apple-silicon Mac (Docker VM with 2 CPUs and 1.9 GiB RAM, shared
+with other containers), Xvfb, Openbox, GTK 4.18. **Simulated only**: no
+Orange Pi and no panel were used. Board and panel results go in
+[device-checklist.md](device-checklist.md) and below once they exist.
+
+| Test | Command | Result |
+|---|---|---|
+| Unit and integration tests | `cargo test` | 129 + 1 passed |
+| Device session at 1024×600, 600×1024, 800×480, crash recovery, crash loop | `./scripts/device-test.sh` | 72 passed, 0 failed |
+| Shell smoke test, both orientations (regression) | `./scripts/smoke-test.sh` | 68 passed, 0 failed |
+| Workflow test, both orientations (regression) | `./scripts/app-workflow-test.sh` | 161 passed, 5 failed: Firefox's page process crashed ("Tab crash reporter") in both orientations, see below |
+
+`device-test.sh` runs the unchanged `device-session.sh` with
+`--xserver Xvfb` (the only difference from the device: no Xorg, no VT, no
+rotation). Per size it checks: the display plan and screen size in the log,
+startup times written, bars at the real screen edges and Today filling the
+work area (no fixed positions), Mousepad launched from Start filling the
+work area; then the shell is killed with SIGABRT: it is restarted, maps its
+bars again and shows Mousepad (with its unsaved text) as the current
+program; End session makes Mousepad ask, the session waits, Don't Save
+ends it with status 0, nothing tagged is left and the X server is gone. A
+stand-in shell that always exits 3 makes the session give up after 5
+crashes with status 1.
+
+Startup in the container (debug build, Xvfb): X server 0.05–0.13 s, window
+manager +0.13 s, shell bars mapped +0.12 s, about 0.3–0.45 s in total.
+These are container numbers, not the board's.
+
+Simulated measurement (`./scripts/device-bench.sh --simulate --runs 2
+--idle 5`, debug build, the VM had about 0.5 GiB free): shell RSS 213 MiB,
+whole session 313 MiB, idle CPU 0.0 % over 5 s, Gnumeric window after
+0.14–0.18 s, Firefox after 0.6–0.9 s, Firefox 413–521 MiB with the page
+open. Under that memory pressure the kernel reclaims pages, so Gnumeric's
+RSS read 13–22 MiB (99 MiB when measured alone). The numbers show the
+script works; they say nothing about the Orange Pi.
+
+Workflow regression failures: the five failed checks are the Firefox web
+form and full-screen steps. The shell log shows Firefox's window titled
+"Tab crash reporter": its content process died while the VM had about
+0.5 GiB free (two older development containers held 0.85 GiB of the 1.9
+GiB). This slice changes no shell or Firefox code path; the same steps
+passed in POC 0.3 (166/166). To be rerun with more memory.
+
+Found and fixed while testing:
+
+- Rust's runtime ignores the first SIGSEGV sent with `kill` (its
+  stack-overflow handler expects the fault to repeat), so a "crash" by
+  SIGSEGV did not end the shell; the test simulates crashes with SIGABRT.
+- Linking four GTK programs in parallel was killed by the OOM killer in a
+  1.9 GiB VM; `install-device.sh` builds with one job (small boards have
+  the same limit).
+
 # POC 0.3 P1 / P2 test results
 
 Date: 2026-10-25. Same environment as below; the container image adds

@@ -21,6 +21,7 @@ pub struct Config {
     pub keyboard: KeyboardConfig,
     pub start_menu: StartMenuConfig,
     pub windows: WindowsConfig,
+    pub device: DeviceConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -137,6 +138,43 @@ pub struct WindowsConfig {
     pub fit_dialogs: bool,
 }
 
+/// Which way the session's screen is used on the physical device.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeviceOrientation {
+    /// As the panel reports its mode (1024x600: landscape).
+    Native,
+    Landscape,
+    Portrait,
+}
+
+/// Direction the picture is turned when the requested orientation differs
+/// from the panel's own (xrandr `--rotate`).
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TurnDirection {
+    Left,
+    Right,
+}
+
+/// The physical device (`scripts/device-session.sh`); the development
+/// session ignores this section.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct DeviceConfig {
+    /// xrandr output (e.g. "HDMI-1"); "auto": the primary or first
+    /// connected one.
+    pub output: String,
+    /// Mode (e.g. "1024x600", "800x480"); "auto": the output's preferred
+    /// mode.
+    pub mode: String,
+    pub orientation: DeviceOrientation,
+    /// Used when `orientation` differs from the panel's own.
+    pub rotate: TurnDirection,
+    /// Blank the screen (DPMS) after this many idle minutes; 0: never.
+    pub screen_off_minutes: u32,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -147,6 +185,19 @@ impl Default for Config {
             keyboard: KeyboardConfig::default(),
             start_menu: StartMenuConfig::default(),
             windows: WindowsConfig::default(),
+            device: DeviceConfig::default(),
+        }
+    }
+}
+
+impl Default for DeviceConfig {
+    fn default() -> Self {
+        Self {
+            output: "auto".into(),
+            mode: "auto".into(),
+            orientation: DeviceOrientation::Landscape,
+            rotate: TurnDirection::Left,
+            screen_off_minutes: 5,
         }
     }
 }
@@ -443,5 +494,20 @@ mod tests {
         assert_eq!(cfg.windows.fullscreen, FullscreenMode::Prevent);
         assert!(cfg.windows.fit_dialogs);
         assert_eq!(cfg.start_menu.hidden, vec!["a.desktop".to_string()]);
+    }
+
+    #[test]
+    fn device_section() {
+        let cfg = Config::parse_with_density(
+            "[device]\norientation = \"portrait\"\nrotate = \"right\"\nmode = \"800x480\"\n",
+            None,
+        )
+        .unwrap();
+        assert_eq!(cfg.device.orientation, DeviceOrientation::Portrait);
+        assert_eq!(cfg.device.rotate, TurnDirection::Right);
+        assert_eq!(cfg.device.mode, "800x480");
+        assert_eq!(cfg.device.output, "auto");
+        let shipped = Config::parse_with_density(include_str!("../config/pda-shell.toml"), None).unwrap();
+        assert_eq!(shipped.device.orientation, DeviceOrientation::Landscape, "landscape is the primary orientation");
     }
 }

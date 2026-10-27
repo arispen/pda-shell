@@ -1,0 +1,39 @@
+# The PDA session on the device's display, started at boot.
+# Installed by scripts/install-device.sh, which replaces @USER@ and @PREFIX@.
+#
+# The unit opens a logind session on tty7 for @USER@ (PAMName, TTYPath),
+# so Xorg runs without root and gets the display and input devices from
+# logind. End session (or a crash loop the script gives up on) ends the
+# service; it is started again after 2 s, at most 5 times in 2 minutes. The
+# text consoles (tty1-6) stay available for maintenance with a keyboard.
+
+[Unit]
+Description=pda-shell device session
+After=systemd-user-sessions.service plymouth-quit-wait.service systemd-udev-settle.service
+Conflicts=getty@tty7.service
+After=getty@tty7.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+User=@USER@
+PAMName=login
+TTYPath=/dev/tty7
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty7
+UtmpMode=user
+WorkingDirectory=~
+ExecStartPre=+/usr/bin/chvt 7
+ExecStart=@PREFIX@/scripts/device-session.sh --vt 7
+Restart=always
+RestartSec=2
+# Give programs time to close normally when the system shuts down.
+TimeoutStopSec=15
+
+[Install]
+WantedBy=graphical.target

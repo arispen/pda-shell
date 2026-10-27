@@ -137,6 +137,21 @@ real configuration. Every process inherits `PDA_SESSION_TAG`; on exit the
 script terminates all processes carrying that tag (including re-parented and
 D-Bus-activated ones), then kills stragglers after 3 s.
 
+## Device session (POC 0.4)
+
+`scripts/device-session.sh` is the same stack on the board's own display:
+Xorg on the logind session's virtual terminal instead of Xephyr/Xvfb, the
+login session's D-Bus bus, Openbox, pda-shell. Device decisions live in
+`src/device/` (no GTK, no X11 connection) behind the `pda-device` binary:
+`pda-device display` turns `xrandr --query` plus `[device]` into an
+output/mode/rotation plan (`device::display`, unit-tested with captured
+xrandr output), `pda-device info` reports the board and its power
+capabilities (`device::system`). The script supervises the shell (restart
+on crash, give up after 5 crashes in 60 s) and Openbox, logs startup
+timings, and is started at boot by a systemd unit
+(`config/device/pda-shell-session.service`). `scripts/device-test.sh` runs
+the unchanged script against Xvfb (`--xserver Xvfb`, a test-only switch).
+
 ## Feasibility findings (Milestone 1)
 
 Verified in the running system before building the UI:
