@@ -4,13 +4,19 @@
 #
 #   ./scripts/setup-debian.sh            # build deps + session + POC apps
 #   ./scripts/setup-debian.sh --minimal  # build deps + session only (no apps)
+#   ./scripts/setup-debian.sh --device   # on the device: the real X server
+#                                        # (Xorg, libinput) and touchscreen
+#                                        # tools instead of Xephyr/Xvfb; see
+#                                        # docs/device-setup.md
 set -euo pipefail
 
 MINIMAL=0
+DEVICE=0
 for arg in "$@"; do
     case "$arg" in
         --minimal) MINIMAL=1 ;;
-        -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
+        --device) DEVICE=1 ;;
+        -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
         *) echo "unknown argument: $arg" >&2; exit 2 ;;
     esac
 done
@@ -32,12 +38,25 @@ BUILD_PKGS=(
 )
 
 SESSION_PKGS=(
-    xserver-xephyr xvfb openbox
-    x11-utils x11-xserver-utils x11-apps xdotool wmctrl
-    imagemagick dbus-x11 dbus-user-session at-spi2-core
+    openbox
+    x11-utils x11-xserver-utils
+    dbus-x11 dbus-user-session at-spi2-core
     adwaita-icon-theme fonts-dejavu-core fonts-wine librsvg2-common dconf-cli
     desktop-file-utils shared-mime-info xdg-utils
     onboard gir1.2-atspi-2.0
+)
+
+# The nested development session and the automated tests.
+DEV_PKGS=(
+    xserver-xephyr xvfb x11-apps xdotool wmctrl imagemagick
+)
+
+# The device session: Xorg on the panel (modesetting driver, libinput for
+# the USB touchscreen), an access cookie, and tools to inspect and
+# calibrate the touchscreen.
+DEVICE_PKGS=(
+    xserver-xorg-core xserver-xorg-input-libinput xauth
+    xinput evtest libinput-tools util-linux
 )
 
 APP_PKGS=(
@@ -45,6 +64,7 @@ APP_PKGS=(
 )
 
 PKGS=("${BUILD_PKGS[@]}" "${SESSION_PKGS[@]}")
+if [ "$DEVICE" -eq 1 ]; then PKGS+=("${DEVICE_PKGS[@]}"); else PKGS+=("${DEV_PKGS[@]}"); fi
 if [ "$MINIMAL" -eq 0 ]; then PKGS+=("${APP_PKGS[@]}"); fi
 
 export DEBIAN_FRONTEND=noninteractive

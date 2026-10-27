@@ -1,7 +1,7 @@
 # Known limitations and status
 
-Last updated: 2026-10-25 (POC 0.3: Pocket PC 2003 SE UX, P0, P1 and P2 of
-issue #4; POC 0.2 sections below unchanged unless noted). Nothing here has
+Last updated: 2026-10-27 (POC 0.4, issue #7: device session; POC 0.3 and
+0.2 sections below unchanged unless noted). Nothing here has
 been tried on the physical 5" resistive display yet; everything ran in the
 nested X11 session (Xvfb + Openbox, Debian 13 arm64 in the dev container).
 
@@ -19,6 +19,39 @@ Status words used below:
 There was no human at a physical screen. The "manual pointer-only test" of
 the issue was replayed by the workflow test with synthetic pointer taps; see
 [test-results.md](test-results.md).
+
+## POC 0.4 status (issue #7)
+
+Evidence is kept in three kinds: **simulated** (Xvfb in the Debian 13 arm64
+container), **arm64 on the real board**, and **panel with stylus**. Only
+the first exists so far; nothing below is marked done from it alone when
+the issue asks for hardware.
+
+| Area | Item | Status |
+|---|---|---|
+| P0 device | Installation procedure (`setup-debian.sh --device`, `install-device.sh`, [device-setup.md](device-setup.md)) | written; **not yet run on a board** |
+| P0 device | Device session without Xephyr/Xvfb or a desktop environment (`device-session.sh`, systemd unit on tty7, logind, rootless Xorg) | **automated, simulated** (`device-test.sh` runs the same script with `--xserver Xvfb`); Xorg on the panel **unverified** |
+| P0 device | Output, mode and rotation from xrandr and `[device]`; 1024×600, 600×1024 and 800×480 without hard-coded positions | **unit-tested** (xrandr parsing, plans for landscape/portrait panels, missing outputs/modes), **automated, simulated** (layout at the three sizes); real rotation **unverified** (Xvfb cannot rotate) |
+| P0 device | Startup timing logged; crashed shell restarted with programs kept; crash loop ends the session; End session keeps save prompts; nothing left running | **automated, simulated** |
+| P0 device | Boot success and startup time on the board | **not done** (no board results) |
+| P1 measurements | `device-bench.sh`: startup, idle/active memory and CPU, Gnumeric/Firefox launch latency, system report | script **automated, simulated**; board numbers **not done** |
+| P1 power | `pda-device info`: backlight, sleep states, power supplies, power key; DPMS blanking | report **demonstrated** (container); suspend, power draw **not done** |
+| P1 | Physical checklist with pass/fail ([device-checklist.md](device-checklist.md)) | written, **not filled in** |
+
+### POC 0.4 device-session limitations
+
+- Xvfb cannot rotate: the rotation path (`xrandr --rotate`) is unit-tested
+  as a plan only. A real panel turned to portrait still needs the
+  touchscreen's transform (Milestone 4).
+- `systemctl stop` or shutdown terminates programs without save prompts;
+  only End session asks.
+- After End session systemd starts a fresh session; there is no login
+  screen or power-off choice in the shell yet.
+- At 800×480 the Today favorites need scrolling; the Start menu drops its
+  favorites rows as in landscape.
+- In the container the shell's debug build uses ~210 MiB RSS (GTK's GL
+  renderer on llvmpipe); the release build on the board may differ and is
+  what counts.
 
 ## POC 0.3 status (issue #4)
 

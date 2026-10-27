@@ -115,6 +115,19 @@ fullscreen = "escape"
 # Move and shrink dialogs that are larger than the work area.
 fit_dialogs = true
 
+[device]
+# The physical device session (scripts/device-session.sh). The development
+# session (dev-session.sh) ignores this section. Override per start:
+# device-session.sh --orientation portrait --mode 800x480 --output HDMI-1.
+output = "auto"           # xrandr output, "auto": primary or first connected
+mode = "auto"             # e.g. "1024x600", "800x480"; "auto": preferred mode
+# "landscape" (primary), "portrait" or "native" (as the panel reports it).
+orientation = "landscape"
+# Which way to turn the picture when the orientation differs from the
+# panel's own (a 1024x600 panel in portrait): "left" or "right".
+rotate = "left"
+screen_off_minutes = 5    # blank the screen (DPMS) when idle; 0: never
+
 # --- Density profiles ----------------------------------------------------
 # Candidates for the readability test on the real panel. Each profile only
 # lists what it changes; all keys of [design] are allowed.
