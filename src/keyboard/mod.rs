@@ -6,6 +6,8 @@
 //! D-Bus interface. Onboard's `Visible` property is followed, so hiding the
 //! keyboard with its own close key (or Onboard exiting) is reported back.
 
+pub mod focus;
+
 use crate::config::KeyboardConfig;
 use crate::shell::layout::{Layout, Orientation, Rect};
 use gtk::gio;

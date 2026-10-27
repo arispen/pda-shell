@@ -99,6 +99,12 @@ happens when a dialog appears, when it resizes itself and when the work area
 changes, never after the user moves it. Windows that cannot fit are logged
 with a `geometry:` prefix.
 
+Oversized dialogs (POC 0.4): a dialog that cannot shrink into the work area
+is reported in the watcher's snapshot (`DialogOverflow`); the shell then
+shows arrows over the status bar (`ui::dialog_pan`, unmanaged like the
+full-screen escape) that slide it with `_NET_MOVERESIZE_WINDOW` (position
+only, so the watcher does not fit it again) to show its cut-off side.
+
 On-screen keyboard: the command bar's strut grows by the keyboard height
 while Onboard is shown, so Openbox shrinks maximized programs; Today and the
 Start menu are resized by the shell. Onboard's `Visible` property
@@ -106,6 +112,16 @@ Start menu are resized by the shell. Onboard's `Visible` property
 hiding it with its own key or Onboard exiting releases the space and resets
 the toggle. Onboard is started through `scripts/bin/pda-onboard`, which works
 around Onboard 1.4.1's broken symbol keys on Python 3.12+.
+
+The built-in panel (POC 0.4) is docked like Onboard or floating
+(`[keyboard] placement`, floating in landscape by default): floating
+reserves no space, sits in a corner of the work area and is moved by
+dragging its strip (pointer position from X, since the strip moves with the
+window). With `[keyboard] show_on_focus` the shell listens on the AT-SPI
+bus (`keyboard::focus`): it registers for `object:state-changed:focused`
+with the registry and shows the panel when the newly focused object's
+state set has EDITABLE, unless the user hid the panel by hand in that same
+object.
 
 Closing uses `_NET_CLOSE_WINDOW`, so each application can ask to save. "End
 session" closes every application this way and only quits when all windows

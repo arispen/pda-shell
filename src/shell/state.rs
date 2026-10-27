@@ -416,7 +416,7 @@ mod tests {
     }
 
     fn snap(windows: Vec<AppWindow>, active: Option<u32>, showing_desktop: bool) -> Event {
-        Event::Windows(WindowSnapshot { windows, active: active.map(WindowId), showing_desktop })
+        Event::Windows(WindowSnapshot { windows, active: active.map(WindowId), showing_desktop, overflow: None })
     }
 
     #[test]

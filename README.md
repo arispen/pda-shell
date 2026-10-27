@@ -30,6 +30,15 @@ Thunar and Mousepad under Programs → Linux tools; a built-in Pocket PC
 style input panel next to Onboard. Not done: any assessment on the
 physical panel.
 
+POC 0.4 (issue #7), the parts that need no hardware: a device session
+that starts on the panel without a desktop
+([docs/device-setup.md](docs/device-setup.md)), system-wide stylus input
+(hold to right-click in every program, calibration), and landscape input:
+a floating built-in panel, spreadsheet keys, optional keyboard on text
+focus, and arrows for dialogs larger than the screen. Board, panel and pen
+results are still to come
+([docs/device-checklist.md](docs/device-checklist.md)).
+
 POC 0.2: real desktop programs (Thunar, Gnumeric, Mousepad, Atril, Firefox
 ESR) are edited, saved and reopened **with the pointer and the on-screen
 keyboard only**, in both orientations, by an automated end-to-end test.
@@ -146,7 +155,9 @@ Programs, Settings, About, Screen, Find, keyboard) in both orientations into
 (`[density.compact|balanced|readable|pocketpc]`, `pocketpc` selected),
 the programs' DPI and font (`app_dpi`, `app_font`), the input panel
 (`[keyboard] panel`: `onboard` or the built-in `pocketpc`), favorites, keyboard command and layout, Start menu filtering, full-screen
-policy and dialog fitting. Session-local edits of the favorites are saved to
+policy and dialog fitting, the device (`[device]`: output, mode, orientation)
+and the stylus (`[stylus]`), the built-in panel's placement and keyboard
+on focus (`[keyboard] placement`, `show_on_focus`). Session-local edits of the favorites are saved to
 `$XDG_CONFIG_HOME/pda-shell/today-shortcuts`.
 `config/share/applications/`: desktop entries of the native programs (the
 session puts `config/share` on `XDG_DATA_DIRS` and the build directory on

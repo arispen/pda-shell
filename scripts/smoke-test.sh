@@ -220,7 +220,62 @@ run_orientation() {
     rm -rf "$ready" "$SESSION_SHELL_PID" "$home"
 }
 
+# [keyboard] show_on_focus: the built-in panel appears when a text field
+# gets the focus; hiding it by hand keeps it hidden for that field; the
+# keyboard button still works.
+focus_session() {
+    echo "== keyboard on text focus (landscape, show_on_focus = true)"
+    ORIENT=focus; W=1024; H=600
+    local home cfg ready; home="$(mktemp -d "${TMPDIR:-/tmp}/pda-smoke-home.XXXXXX")"
+    cfg="$home/pda-shell.toml"
+    sed 's/^panel = "onboard"/panel = "pocketpc"/; s/^show_on_focus = false/show_on_focus = true/' \
+        "$REPO/config/pda-shell.toml" > "$cfg"
+    ready="$(mktemp)"; rm -f "$ready"
+    PDA_SHELL_CONFIG="$cfg" "$REPO/scripts/dev-session.sh" --orientation landscape --headless --no-build \
+        --ready-file "$ready" --home "$home/h" --reset-home > "$SHOTS/focus-session.out" 2>&1 &
+    local session=$!
+    if ! WAIT=200 wait_for test -s "$ready"; then fail "session became ready"; kill "$session"; wait "$session"; return; fi
+    # shellcheck disable=SC1090
+    . "$ready"; export DISPLAY
+    SESSION_SHELL_PID="$(mktemp)"
+    for w in $(xdotool search --classname pda-shell); do xdotool getwindowpid "$w" > "$SESSION_SHELL_PID" 2>/dev/null && break; done
+    export DBUS_SESSION_BUS_ADDRESS
+    DBUS_SESSION_BUS_ADDRESS="$(tr '\0' '\n' < "/proc/$(cat "$SESSION_SHELL_PID")/environ" | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p')"
+    sleep 1
+    panel_shown() { xdotool search --onlyvisible --name '^Input panel$' >/dev/null 2>&1; }
+    panel_hidden() { ! panel_shown; }
+    check "no panel before any text field has the focus" panel_hidden
+    tap 30 12; wait_for mapped_named Start; sleep 0.5
+    xdotool type --delay 40 mousepad; sleep 0.4; xdotool key Return
+    wait_long has_class Mousepad
+    check "with Mousepad's text field focused the panel is up" wait_for panel_shown
+    ui tap pda-shell button "keyboard" --frame "command bar" >/dev/null
+    check "the keyboard button hides it" wait_for panel_hidden
+    tap 30 $((H - 25)); wait_for showing_desktop 1
+    tap 100 $((H - 25)); wait_for has_popup
+    ui tap pda-shell "list item" "Mousepad" --frame "command bar" >/dev/null
+    wait_for is_active_class Mousepad; sleep 1
+    check "back in the same field: stays hidden (hidden by hand)" panel_hidden
+    xdotool key ctrl+f; sleep 1.5
+    check "another text field (Mousepad's search) brings it up again" wait_for panel_shown
+    shot focus-search-field
+    xdotool key Escape; sleep 0.3
+    ui tap pda-shell button "keyboard" --frame "command bar" >/dev/null; wait_for panel_hidden
+    ui tap pda-shell button "keyboard" --frame "command bar" >/dev/null
+    check "manual activation still works" wait_for panel_shown
+    ui tap pda-shell button "keyboard" --frame "command bar" >/dev/null
+    xdotool key ctrl+q; sleep 0.5
+    for w in $(xdotool search --name "Save Changes" 2>/dev/null); do xdotool key --window "$w" alt+d; done
+    wait_long no_class Mousepad
+    tap 30 12; wait_for mapped_named Start; sleep 0.5
+    ui tap pda-shell "list item" "^End session$" --frame "^Start$" >/dev/null
+    local t=100; while kill -0 "$session" 2>/dev/null && [ $t -gt 0 ]; do sleep 0.1; t=$((t - 1)); done
+    kill "$session" 2>/dev/null; wait "$session" 2>/dev/null
+    rm -rf "$home" "$ready" "$SESSION_SHELL_PID"
+}
+
 for o in "${ORIENTATIONS[@]}"; do run_orientation "$o"; done
+focus_session
 echo
 echo "smoke test: $PASS passed, $FAIL failed (screenshots in $SHOTS)"
 [ "$FAIL" -eq 0 ]

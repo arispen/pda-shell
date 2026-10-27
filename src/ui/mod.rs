@@ -1,6 +1,7 @@
 //! GTK user interface of the shell.
 
 pub mod command_bar;
+pub mod dialog_pan;
 pub mod escape;
 pub mod programs;
 pub mod settings;
@@ -100,6 +101,20 @@ window.sip-panel button.sip-key {{
 window.sip-panel button.sip-key label {{ color: {text}; }}
 window.sip-panel button.sip-key:active, window.sip-panel button.sip-key.latched {{ background: {accent}; }}
 window.sip-panel button.sip-key:active label, window.sip-panel button.sip-key.latched label {{ color: {accent_fg}; }}
+window.sip-panel.floating {{ border: 1px solid {menu_border}; }}
+window.sip-panel.floating button.sip-key.word label {{ font-size: {small_px}px; }}
+window.sip-panel .sip-strip {{
+    background: linear-gradient(to bottom, {bar_bg}, {bar_bg_end}); color: {bar_fg};
+    padding: 0 {pad}px;
+}}
+window.sip-panel .sip-strip label {{ color: {bar_fg}; font-weight: bold; }}
+
+/* Arrows for dialogs larger than the screen, over the status bar */
+window.dialog-pan {{ background: linear-gradient(to bottom, {bar_bg}, {bar_bg_end}); }}
+window.dialog-pan button {{
+    background: {focus}; color: {text}; border: 1px solid {bar_bg_end};
+    border-radius: 0; margin: 0; padding: 0; min-width: 0;
+}}
 
 /* Today */
 window.today {{ background: {surface}; }}

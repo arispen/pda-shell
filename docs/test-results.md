@@ -1,3 +1,43 @@
+# POC 0.4 test results: landscape input and oversized dialogs (issue #7, P1)
+
+Date: 2026-10-27. Same container (Xvfb, Openbox, real programs). **Not
+judged on the panel.** Screenshots: `screenshots/landscape-input/`.
+
+| Test | Command | Result |
+|---|---|---|
+| Unit and integration tests | `cargo test` | 157 + 1 passed |
+| Shell smoke test + keyboard-on-focus session | `./scripts/smoke-test.sh` | 74 passed, 0 failed |
+| Workflow test, both orientations | `./scripts/app-workflow-test.sh` | 192 passed, 0 failed |
+
+New in the workflow test, pointer and on-screen keys only:
+
+- Gnumeric's Save As (878×649 with the docked keyboard): the file name row
+  is off screen at first; the shell offers arrows over the status bar;
+  portrait ◀ / landscape ▲ brings the name row on screen, ▶ / ▼ brings
+  Save back, the arrows disappear with the dialog.
+- Built-in panel: docked in portrait (work area shrinks, programs resize),
+  floating in landscape (work area stays 1024×502, the panel lies inside
+  it, Notes and Gnumeric keep the whole work area).
+- The acceptance formula `=SUM(B2:B13)*2` typed into Gnumeric's B20 with
+  the spreadsheet keys (`123`, then `= SUM( B 2 : B 1 3 ) * 2 ↵`, 12 taps
+  against about 25 with Onboard's layers), saved through the command bar:
+  B20 = 104643 in the saved file, both orientations.
+- Smoke test, `show_on_focus = true`: Mousepad's text field shows the
+  panel; hidden by hand it stays hidden when that field gets the focus
+  again; Mousepad's search field shows it again; the keyboard button still
+  works.
+
+Found and fixed while testing:
+
+- The floating panel was sized for the larger key set (both are in one
+  stack) and ran 130 px past the screen edge; the stack now sizes to the
+  shown set and the panel is never placed smaller than its measured size.
+- GTK 4 named the arrow buttons by their glyph ("◀"); the glyph is now
+  presentational and the buttons are named by what they do.
+- GTK 3's AT-SPI extents of the file chooser's name field were not usable
+  for the check; it uses the dialog's X geometry (the name row is its
+  first row).
+
 # POC 0.4 test results: system-wide stylus input (issue #7, Milestone 4)
 
 Date: 2026-10-27. Same container as the device session below. **No pen and
@@ -57,7 +97,7 @@ Orange Pi and no panel were used. Board and panel results go in
 | Unit and integration tests | `cargo test` | 129 + 1 passed |
 | Device session at 1024×600, 600×1024, 800×480, crash recovery, crash loop | `./scripts/device-test.sh` | 72 passed, 0 failed |
 | Shell smoke test, both orientations (regression) | `./scripts/smoke-test.sh` | 68 passed, 0 failed |
-| Workflow test, both orientations (regression) | `./scripts/app-workflow-test.sh` | 161 passed, 5 failed: Firefox's page process crashed ("Tab crash reporter") in both orientations, see below |
+| Workflow test, both orientations (regression) | `./scripts/app-workflow-test.sh` | 161 passed, 5 failed: Firefox's page process crashed ("Tab crash reporter") in both orientations, see below; 192/192 in the later full run |
 
 `device-test.sh` runs the unchanged `device-session.sh` with
 `--xserver Xvfb` (the only difference from the device: no Xorg, no VT, no
@@ -88,7 +128,8 @@ form and full-screen steps. The shell log shows Firefox's window titled
 "Tab crash reporter": its content process died while the VM had about
 0.5 GiB free (two older development containers held 0.85 GiB of the 1.9
 GiB). This slice changes no shell or Firefox code path; the same steps
-passed in POC 0.3 (166/166). To be rerun with more memory.
+passed in POC 0.3 (166/166) and passed again in the later full run
+(192/192, landscape-input section above).
 
 Found and fixed while testing:
 

@@ -7,12 +7,14 @@ pub mod state;
 
 use crate::apps::{self, AppEntry};
 use crate::config::Config;
+use crate::keyboard::focus::{self, Focus, FocusWatch};
 use crate::keyboard::Keyboard;
 use crate::platform::x11::{self, gtk_glue, X11};
 use crate::platform::{SurfaceRole, WindowId, WindowSystem};
 use crate::ui::command_bar::{CommandBar, SwitcherEntry};
+use crate::ui::dialog_pan::DialogPan;
 use crate::ui::escape::FullscreenEscape;
-use crate::ui::sip::InputPanel;
+use crate::ui::sip::{InputPanel, Placement};
 use crate::ui::start_menu::StartMenu;
 use crate::ui::status_bar::StatusBar;
 use crate::ui::today::Today;
@@ -43,6 +45,8 @@ pub enum Command {
     OnboardVisible(bool),
     /// A desktop action of an application (e.g. Notes' new note).
     LaunchAction(String, String),
+    /// An object in some program got the focus (AT-SPI).
+    TextFocus(Focus),
 }
 
 pub type Dispatch = Rc<dyn Fn(Command)>;
@@ -95,6 +99,16 @@ pub struct Shell {
     sip: Rc<InputPanel>,
     /// Which input panel the keyboard button shows.
     panel: RefCell<String>,
+    /// Keyboard on text focus ([keyboard] show_on_focus): the watch, the
+    /// object that has the focus, and the field the user hid the panel in.
+    focus_watch: RefCell<Option<FocusWatch>>,
+    focus: RefCell<Option<Focus>>,
+    dismissed_in: RefCell<Option<(String, String)>>,
+    /// The panel is being shown because a field got the focus: the
+    /// program already has it, so it is not activated again.
+    auto_shown: Cell<bool>,
+    /// Arrows for dialogs larger than the work area.
+    pan: Rc<DialogPan>,
     menu_closed_at: Cell<Option<Instant>>,
     /// Kept alive so installs and removals keep being reported.
     app_monitor: RefCell<Option<gio::AppInfoMonitor>>,
@@ -144,7 +158,9 @@ impl Shell {
         let d = dispatch.clone();
         let on_keyboard_visible: Rc<dyn Fn(bool)> = Rc::new(move |v| d(Command::OnboardVisible(v)));
         let keyboard = RefCell::new(Keyboard::new(cfg.keyboard.clone(), &layout, on_keyboard_visible));
-        let sip = InputPanel::new(app, keyboard.borrow().rect(), &x11, &cfg);
+        let placement = Placement::from_config(&cfg.keyboard.placement, layout.orientation);
+        let sip = InputPanel::new(app, keyboard.borrow().rect(), layout.workarea, placement, &x11, &cfg);
+        let pan = DialogPan::new(app, &layout, &x11, &cfg);
         let panel = match cfg.keyboard.panel.as_str() {
             p @ ("pocketpc" | "onboard") => p.to_string(),
             other => {
@@ -170,11 +186,20 @@ impl Shell {
             keyboard,
             sip,
             panel: RefCell::new(panel),
+            focus_watch: RefCell::new(None),
+            focus: RefCell::new(None),
+            dismissed_in: RefCell::new(None),
+            auto_shown: Cell::new(false),
+            pan,
             menu_closed_at: Cell::new(None),
             app_monitor: RefCell::new(None),
             dispatch,
         });
         *weak.borrow_mut() = Rc::downgrade(&shell);
+        if cfg.keyboard.show_on_focus {
+            let d = shell.dispatch.clone();
+            *shell.focus_watch.borrow_mut() = focus::watch(Rc::new(move |f| d(Command::TextFocus(f))));
+        }
 
         // Openbox's focus-stealing prevention would leave keyboard focus in
         // the application under the Start menu; the user did ask for the
@@ -253,7 +278,31 @@ impl Shell {
                 log::warn!("some programs did not close; staying in the session");
                 self.handle(Event::EndSessionTimeout);
             }
+            Command::Shell(Event::ToggleKeyboard) => {
+                // Hidden by hand in a text field: not shown again for it.
+                *self.dismissed_in.borrow_mut() = if self.state.borrow().keyboard_visible() {
+                    self.focus.borrow().as_ref().filter(|f| f.editable).map(|f| f.object.clone())
+                } else {
+                    None
+                };
+                self.handle(Event::ToggleKeyboard);
+            }
+            Command::Shell(Event::Windows(snap)) => {
+                self.pan.set(snap.overflow);
+                self.handle(Event::Windows(snap));
+            }
             Command::Shell(ev) => self.handle(ev),
+            Command::TextFocus(f) => {
+                let visible = self.state.borrow().keyboard_visible();
+                let show = focus::decide(&f, visible, self.dismissed_in.borrow().as_ref());
+                log::debug!("text focus {f:?}: show panel {show}");
+                *self.focus.borrow_mut() = Some(f);
+                if show {
+                    self.auto_shown.set(true);
+                    self.handle(Event::ToggleKeyboard);
+                    self.auto_shown.set(false);
+                }
+            }
             Command::StartButton => {
                 let guarded = !self.state.borrow().start_menu_open()
                     && self.menu_closed_at.get().is_some_and(|t| t.elapsed() < MENU_REOPEN_GUARD);
@@ -324,7 +373,7 @@ impl Shell {
     }
 
     fn show_panel(&self, visible: bool) {
-        if visible {
+        if visible && !self.auto_shown.get() {
             self.refocus_app();
         }
         if *self.panel.borrow() == "pocketpc" {
@@ -349,10 +398,27 @@ impl Shell {
         *self.panel.borrow_mut() = name.clone();
         self.command.set_input_panel(&name);
         // Both panels use the same reserved space; the new one takes over.
+        // A floating panel reserves none, Onboard always does.
         if visible {
             self.show_panel(true);
+            self.reserve_keyboard(true);
         } else {
             self.refocus_app();
+        }
+    }
+
+    /// Keep programs (and Today, the Start menu) clear of a docked
+    /// keyboard; a floating panel covers them instead.
+    fn reserve_keyboard(&self, visible: bool) {
+        let floating = *self.panel.borrow() == "pocketpc" && self.sip.placement() == Placement::Floating;
+        let extra = if visible && !floating { self.keyboard.borrow().rect().height } else { 0 };
+        let shrink = |r: layout::Rect| layout::Rect { height: r.height.saturating_sub(extra), ..r };
+        self.today.win.set_rect(shrink(self.layout.workarea));
+        self.start.set_available(shrink(self.layout.start_menu));
+        if let Some(xid) = gtk_glue::xid(self.command.win.window.upcast_ref()) {
+            if let Err(e) = self.x11.reserve(xid, SurfaceRole::BottomPanel, self.layout.bottom_bar, extra) {
+                log::warn!("cannot reserve keyboard space: {e}");
+            }
         }
     }
 
@@ -395,19 +461,9 @@ impl Shell {
             },
             Effect::ShowPage(page) => self.today.show_page(page),
             Effect::SetKeyboard(visible) => self.show_panel(visible),
-            Effect::ReserveKeyboard(visible) => {
-                let extra = if visible { self.keyboard.borrow().rect().height } else { 0 };
-                // Today and the Start menu shrink like applications do, so
-                // the keyboard never covers their lower part (End session).
-                let shrink = |r: layout::Rect| layout::Rect { height: r.height.saturating_sub(extra), ..r };
-                self.today.win.set_rect(shrink(self.layout.workarea));
-                self.start.set_available(shrink(self.layout.start_menu));
-                if let Some(xid) = gtk_glue::xid(self.command.win.window.upcast_ref()) {
-                    if let Err(e) = self.x11.reserve(xid, SurfaceRole::BottomPanel, self.layout.bottom_bar, extra) {
-                        log::warn!("cannot reserve keyboard space: {e}");
-                    }
-                }
-            }
+            // Today and the Start menu shrink like applications do, so a
+            // docked keyboard never covers their lower part (End session).
+            Effect::ReserveKeyboard(visible) => self.reserve_keyboard(visible),
             Effect::StartEndSessionTimer => {
                 let d = self.dispatch.clone();
                 glib::timeout_add_local_once(END_SESSION_TIMEOUT, move || {
@@ -424,8 +480,10 @@ impl Shell {
     }
 
     fn refresh_ui(&self) {
-        // A window that appeared or was raised must not cover the panel.
+        // A window that appeared or was raised must not cover the panel
+        // or the dialog arrows.
         self.sip.raise();
+        self.pan.raise();
         let st = self.state.borrow();
         self.status.set_title(&st.title());
         self.status.set_start_open(st.start_menu_open());
