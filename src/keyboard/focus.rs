@@ -78,6 +78,10 @@ pub fn watch(on_focus: Rc<dyn Fn(Focus)>) -> Option<FocusWatch> {
         gio::DBusSignalFlags::NONE,
         {
             let conn = conn.clone();
+            // Each focus change gets a number; a reply that comes back after
+            // the focus has moved on (replies can arrive out of order) is
+            // about an object that no longer has the focus and is dropped.
+            let generation = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
             move |signal| {
                 // (kind, detail1, detail2, any_data, properties); detail1 = 1: gained.
                 let gained = signal.parameters.child_value(1).get::<i32>() == Some(1);
@@ -86,6 +90,8 @@ pub fn watch(on_focus: Rc<dyn Fn(Focus)>) -> Option<FocusWatch> {
                 }
                 let object = (signal.sender_name.to_string(), signal.object_path.to_string());
                 let on_focus = on_focus.clone();
+                let mine = generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                let generation = generation.clone();
                 let (name, path) = object.clone();
                 conn.call(
                     Some(&name),
@@ -98,6 +104,10 @@ pub fn watch(on_focus: Rc<dyn Fn(Focus)>) -> Option<FocusWatch> {
                     1000,
                     gio::Cancellable::NONE,
                     move |r| {
+                        if !is_current(&generation, mine) {
+                            log::debug!("focus reply for {:?} after the focus moved on; ignored", object);
+                            return;
+                        }
                         let editable = r.ok().and_then(|v| v.get::<(Vec<u32>,)>()).is_some_and(|(s,)| is_editable(&s));
                         on_focus(Focus { object, editable });
                     },
@@ -124,9 +134,24 @@ pub fn watch(on_focus: Rc<dyn Fn(Focus)>) -> Option<FocusWatch> {
     Some(FocusWatch { _conn: conn, _sub: sub })
 }
 
+/// Whether request number `mine` is still the latest focus change.
+fn is_current(generation: &std::sync::atomic::AtomicU64, mine: u64) -> bool {
+    generation.load(std::sync::atomic::Ordering::SeqCst) == mine
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_latest_focus_reply_counts() {
+        let g = std::sync::atomic::AtomicU64::new(0);
+        let first = g.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let second = g.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        // The first request's reply arrives after the second focus change.
+        assert!(!is_current(&g, first));
+        assert!(is_current(&g, second));
+    }
 
     fn focus(path: &str, editable: bool) -> Focus {
         Focus { object: (":1.5".into(), path.into()), editable }

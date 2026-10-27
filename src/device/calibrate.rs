@@ -7,6 +7,12 @@
 //! session's rotation applied. The fitted calibration is saved to
 //! `~/.config/pda-shell/stylus-calibration` and the daemon reloads again;
 //! Cancel puts the previous file back.
+//!
+//! Each time the file changes, the X server's own mapping of the
+//! touchscreen (the fallback `device-session.sh` sets up for when the
+//! daemon does not run or stops) is set from it too, so measuring through
+//! that fallback starts from the identity and a saved calibration does not
+//! fall back to the matrix of the session start.
 
 use super::display::Rotation;
 use super::stylus::{self, Affine, CALIBRATION_TARGETS};
@@ -19,10 +25,43 @@ use std::rc::Rc;
 /// Remaining error (normalized) above which the taps are asked again.
 const MAX_ERROR: f64 = 0.03;
 
-fn reload_daemon() {
+/// Make the daemon and the X server use the calibration file as it is now.
+fn reload(rotation: Rotation) {
     // The daemon runs as `pda-device stylus` in the same session.
     let _ = Command::new("pkill").args(["-HUP", "-f", "pda-device stylus"]).status();
+    set_x_matrix(rotation);
 }
+
+/// The touchscreen's "Coordinate Transformation Matrix" in X: rotation
+/// after the calibration, as `pda-device touch` computes it at start.
+#[cfg(target_os = "linux")]
+fn set_x_matrix(rotation: Rotation) {
+    let cfg = crate::config::Config::load();
+    let selector = &cfg.stylus.device;
+    let resolved = match selector.starts_with('/') {
+        true => std::fs::canonicalize(selector).map(|p| p.to_string_lossy().into_owned()).unwrap_or(selector.clone()),
+        false => selector.clone(),
+    };
+    let devices = super::evdev::list_devices();
+    let device = match stylus::choose(&devices, &resolved) {
+        Ok(d) => d,
+        Err(e) => {
+            log::info!("no X mapping to update: {e}");
+            return;
+        }
+    };
+    let m = stylus::transform(&stylus::effective(&cfg.stylus), rotation).to_ctm();
+    let mut args = vec!["set-prop".to_string(), format!("pointer:{}", device.name), "Coordinate Transformation Matrix".into()];
+    args.extend(m.split(' ').map(String::from));
+    match Command::new("xinput").args(&args).status() {
+        Ok(s) if s.success() => log::info!("X mapping of {} set to {m}", device.name),
+        Ok(s) => log::warn!("xinput could not map {}: {s}", device.name),
+        Err(e) => log::warn!("xinput: {e}"),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_x_matrix(_rotation: Rotation) {}
 
 fn write(path: &PathBuf, m: &Affine) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
@@ -49,7 +88,7 @@ pub fn run(rotation: Rotation) -> glib::ExitCode {
         eprintln!("pda-device: {}: {e}", path.display());
         return glib::ExitCode::FAILURE;
     }
-    reload_daemon();
+    reload(rotation);
 
     let app = gtk::Application::builder()
         .application_id("io.github.pda_shell.Calibrate")
@@ -149,7 +188,7 @@ pub fn run(rotation: Rotation) -> glib::ExitCode {
                 match stylus::calibrate(rotation, &s.measured, &CALIBRATION_TARGETS) {
                     Some((c, err)) if err <= MAX_ERROR => match write(&path_c, &c) {
                         Ok(()) => {
-                            reload_daemon();
+                            reload(rotation);
                             *saved_c.borrow_mut() = true;
                             log::info!("calibration saved: {:?}, error {:.1} %", c.0, err * 100.0);
                             println!("{:?}", c.0);
@@ -175,7 +214,7 @@ pub fn run(rotation: Rotation) -> glib::ExitCode {
             (state.clone(), area.clone(), again.clone(), close.clone(), cancel.clone(), path_in.clone(), saved_in.clone());
         again.connect_clicked(move |_| {
             let _ = write(&path_c, &Affine::IDENTITY);
-            reload_daemon();
+            reload(rotation);
             *saved_c.borrow_mut() = false;
             *st.borrow_mut() = State {
                 step: 0,
@@ -205,7 +244,7 @@ pub fn run(rotation: Rotation) -> glib::ExitCode {
         if let Err(e) = restored {
             eprintln!("pda-device: cannot restore {}: {e}", path.display());
         }
-        reload_daemon();
+        reload(rotation);
     }
     code
 }

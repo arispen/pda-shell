@@ -28,6 +28,7 @@ x11rb::atom_manager! {
         UTF8_STRING,
         WM_TRANSIENT_FOR,
         _NET_CLIENT_LIST,
+        _NET_CLIENT_LIST_STACKING,
         _NET_ACTIVE_WINDOW,
         _NET_SHOWING_DESKTOP,
         _NET_WORKAREA,
@@ -49,6 +50,7 @@ x11rb::atom_manager! {
         _NET_WM_STATE_STICKY,
         _NET_WM_STATE_ABOVE,
         _NET_WM_STATE_FULLSCREEN,
+        _NET_WM_STATE_HIDDEN,
         _NET_FRAME_EXTENTS,
         _NET_MOVERESIZE_WINDOW,
         _XSETTINGS_SETTINGS,
@@ -346,6 +348,8 @@ pub struct ClientInfo {
     pub types: Vec<WindowType>,
     pub skip_taskbar: bool,
     pub fullscreen: bool,
+    /// Minimized.
+    pub hidden: bool,
     pub transient_for: Option<u32>,
     pub menus: Option<super::AppMenus>,
 }
@@ -369,6 +373,29 @@ pub enum WindowType {
     Dock,
     Desktop,
     Other,
+}
+
+/// The dialog to offer arrows for: the frontmost program window (top of the
+/// stacking order, minimized ones and the shell's own left out) when it is
+/// a dialog that does not fit, and none while the desktop (Today) shows.
+/// A dialog behind another window, minimized, or left behind by switching
+/// programs gets no arrows over the status bar.
+pub fn frontmost_overflow(
+    stacking: &[u32],
+    clients: &[ClientInfo],
+    own_pid: u32,
+    showing_desktop: bool,
+    overflowing: impl Fn(u32) -> bool,
+) -> Option<u32> {
+    if showing_desktop {
+        return None;
+    }
+    let top = stacking.iter().rev().find_map(|id| {
+        clients.iter().find(|c| c.id == *id).filter(|c| {
+            !c.shell_owned(own_pid) && !c.hidden && !matches!(c.types.first(), Some(WindowType::Dock | WindowType::Desktop))
+        })
+    })?;
+    overflowing(top.id).then_some(top.id)
 }
 
 /// Whether a managed window should appear in the switcher.
@@ -502,6 +529,7 @@ impl Watcher {
             types,
             skip_taskbar: states.contains(&a._NET_WM_STATE_SKIP_TASKBAR),
             fullscreen: states.contains(&a._NET_WM_STATE_FULLSCREEN),
+            hidden: states.contains(&a._NET_WM_STATE_HIDDEN),
             transient_for: self
                 .prop32(id, a.WM_TRANSIENT_FOR, AtomEnum::WINDOW)
                 .first()
@@ -557,9 +585,12 @@ impl Watcher {
         let active = resolve_active(&clients, &windows, active_raw, self.last_active, self.own_pid);
         self.last_active = active;
         let _ = self.x.conn.flush();
-        // The newest overflowing dialog (client list order is mapping order).
-        let overflow = ids.iter().rev().find_map(|id| {
-            self.overflowing.get(id).map(|(size, area)| DialogOverflow { window: WindowId(*id), size: *size, area: *area })
+        let stacking = self.prop32(self.x.root, a._NET_CLIENT_LIST_STACKING, AtomEnum::WINDOW);
+        let front = frontmost_overflow(&stacking, &clients, self.own_pid, showing_desktop, |id| {
+            self.overflowing.contains_key(&id)
+        });
+        let overflow = front.and_then(|id| {
+            self.overflowing.get(&id).map(|(size, area)| DialogOverflow { window: WindowId(id), size: *size, area: *area })
         });
         WindowSnapshot { windows, active, showing_desktop, overflow }
     }
@@ -744,6 +775,26 @@ mod tests {
         assert_eq!(min_size(&[8, 0, 0, 0, 0, 640, 480, 0, 0]), None, "PMinSize not set");
         assert_eq!(min_size(&[16, 0]), None);
         assert_eq!(min_size(&[]), None);
+    }
+
+    #[test]
+    fn dialog_arrows_only_for_the_frontmost_dialog() {
+        let gnumeric = client(1, "Gnumeric", &[WindowType::Normal]);
+        let mut save_as = client(2, "Gnumeric", &[WindowType::Dialog]);
+        let mousepad = client(3, "Mousepad", &[WindowType::Normal]);
+        let panel = ClientInfo { pid: Some(OWN), ..client(4, "pda-shell", &[WindowType::Dock]) };
+        let over = |id| id == 2;
+        let all = [gnumeric.clone(), save_as.clone(), mousepad.clone(), panel.clone()];
+        // The dialog is on top (the shell's own windows above it do not count).
+        assert_eq!(frontmost_overflow(&[1, 3, 2, 4], &all, OWN, false, over), Some(2));
+        // Another program came to the front.
+        assert_eq!(frontmost_overflow(&[1, 2, 3, 4], &all, OWN, false, over), None);
+        // Today is showing.
+        assert_eq!(frontmost_overflow(&[1, 3, 2, 4], &all, OWN, true, over), None);
+        // Minimized with its program.
+        save_as.hidden = true;
+        let all = [gnumeric, save_as, mousepad, panel];
+        assert_eq!(frontmost_overflow(&[3, 1, 2], &all, OWN, false, over), None);
     }
 
     #[test]

@@ -8,13 +8,13 @@
 //! process dies), after which the X server gets the raw touchscreen back.
 
 use super::display::Rotation;
-use super::evdev::{list_devices, EvdevDevice, VirtualPointer};
+use super::evdev::{self, list_devices, EvdevDevice, VirtualPointer};
 use super::stylus::{self, Translator};
 use crate::config::Config;
 use crate::input::gesture::GestureConfig;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 static STOP: AtomicBool = AtomicBool::new(false);
 static RELOAD: AtomicBool = AtomicBool::new(false);
@@ -56,8 +56,15 @@ fn wait_readable(fd: i32, timeout: Duration) -> bool {
     r > 0
 }
 
-fn now_ms(start: Instant) -> u64 {
-    start.elapsed().as_millis() as u64
+/// The daemon's clock: the monotonic clock events are stamped with.
+fn now_ms() -> u64 {
+    evdev::monotonic_ms()
+}
+
+/// When an event happened: its kernel time, never later than now nor
+/// earlier than the event before it (the translator's times only grow).
+fn event_time(stamp: Option<u64>, now: u64, last: u64) -> u64 {
+    stamp.map_or(now, |t| t.min(now)).max(last)
 }
 
 /// The touchscreen to use now, by the configured selector (a udev symlink
@@ -90,7 +97,6 @@ pub fn run(opts: Options) -> Result<(), String> {
         opts.screen.1,
         opts.rotation.name()
     );
-    let start = Instant::now();
     let mut last_error = String::new();
 
     while !STOP.load(Ordering::SeqCst) {
@@ -128,6 +134,7 @@ pub fn run(opts: Options) -> Result<(), String> {
             cfg.input.long_press_ms,
             if cfg.stylus.right_click { "" } else { " (off)" }
         );
+        let mut last = 0;
         let mut t = Translator::new(
             GestureConfig::from(&cfg.input),
             cfg.stylus.right_click,
@@ -145,15 +152,16 @@ pub fn run(opts: Options) -> Result<(), String> {
                 t.set_transform(stylus::transform(&stylus::effective(&cfg.stylus), opts.rotation));
                 log::info!("calibration reloaded");
             }
-            let now = now_ms(start);
+            let now = now_ms();
             let timeout = t.deadline(now).map_or(Duration::from_millis(1000), |d| Duration::from_millis(d - now));
             let mut out = Vec::new();
             if wait_readable(dev.fd(), timeout) {
                 match dev.read() {
                     Ok(events) => {
-                        let now = now_ms(start);
-                        for ev in events {
-                            out.extend(t.feed(now, ev));
+                        let now = now_ms();
+                        for (stamp, ev) in events {
+                            last = event_time(stamp, now, last);
+                            out.extend(t.feed(last, ev));
                         }
                     }
                     Err(e) => {
@@ -163,7 +171,7 @@ pub fn run(opts: Options) -> Result<(), String> {
                     }
                 }
             }
-            out.extend(t.tick(now_ms(start)));
+            out.extend(t.tick(now_ms()));
             if !out.is_empty() {
                 if let Err(e) = virt.emit(&out) {
                     log::error!("virtual pointer: {e}");
@@ -175,4 +183,23 @@ pub fn run(opts: Options) -> Result<(), String> {
     }
     log::info!("stopping; the touchscreen goes back to the X server");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::event_time;
+
+    #[test]
+    fn events_keep_their_own_times_in_order() {
+        // A down and an up read in one batch 800 ms later keep 800 ms apart.
+        let now = 10_800;
+        let down = event_time(Some(10_000), now, 0);
+        let up = event_time(Some(10_800), now, down);
+        assert_eq!(up - down, 800);
+        // No kernel time: the time of reading.
+        assert_eq!(event_time(None, now, 0), now);
+        // Never in the future, never before the previous event.
+        assert_eq!(event_time(Some(20_000), now, 0), now);
+        assert_eq!(event_time(Some(9_000), now, 9_500), 9_500);
+    }
 }

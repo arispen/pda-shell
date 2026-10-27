@@ -47,6 +47,7 @@ const fn eviocgabs(axis: u16) -> u64 {
 }
 const EVIOCGID: u64 = ioc(READ, b'E', 0x02, 8);
 const EVIOCGRAB: u64 = ioc(WRITE, b'E', 0x90, std::mem::size_of::<libc::c_int>());
+const EVIOCSCLOCKID: u64 = ioc(WRITE, b'E', 0xa0, std::mem::size_of::<libc::c_int>());
 const fn eviocgname(len: usize) -> u64 {
     ioc(READ, b'E', 0x06, len)
 }
@@ -147,6 +148,17 @@ pub struct EvdevDevice {
     pub y: AbsRange,
     touch_key: u16,
     grabbed: bool,
+    /// Event times are CLOCK_MONOTONIC (`monotonic_ms`), not wall-clock.
+    monotonic: bool,
+}
+
+/// Milliseconds of CLOCK_MONOTONIC: the clock of event times once a device
+/// is switched to it, and of the daemon's timers.
+pub fn monotonic_ms() -> u64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: clock_gettime writes the timespec it is given.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    ts.tv_sec as u64 * 1000 + ts.tv_nsec as u64 / 1_000_000
 }
 
 fn probe_file(path: &Path, file: File) -> io::Result<EvdevDevice> {
@@ -190,7 +202,11 @@ fn probe_file(path: &Path, file: File) -> io::Result<EvdevDevice> {
         direct: has(&props, INPUT_PROP_DIRECT),
     };
     let touch_key = if info.btn_touch { BTN_TOUCH } else { BTN_LEFT };
-    Ok(EvdevDevice { file, info, x, y, touch_key, grabbed: false })
+    // Stamp events with the monotonic clock, so their times compare with
+    // the daemon's timers (wall-clock time jumps).
+    let mut clock = libc::CLOCK_MONOTONIC;
+    let monotonic = ioctl_ptr(&file, EVIOCSCLOCKID, &mut clock).is_ok();
+    Ok(EvdevDevice { file, info, x, y, touch_key, grabbed: false, monotonic })
 }
 
 impl EvdevDevice {
@@ -212,9 +228,13 @@ impl EvdevDevice {
         Ok(())
     }
 
-    /// Everything readable now, decoded. `Ok(empty)` when nothing is
-    /// pending; ENODEV when the device was unplugged.
-    pub fn read(&mut self) -> io::Result<Vec<RawEvent>> {
+    /// Everything readable now, decoded, each with the kernel's time of the
+    /// event in `monotonic_ms` (None if the device could not be switched to
+    /// that clock). A down and an up read together keep their real distance
+    /// in time, so a hold is not taken for a tap when the daemon was not
+    /// scheduled in between. `Ok(empty)` when nothing is pending; ENODEV when
+    /// the device was unplugged.
+    pub fn read(&mut self) -> io::Result<Vec<(Option<u64>, RawEvent)>> {
         const SIZE: usize = std::mem::size_of::<InputEvent>();
         let mut buf = [0u8; SIZE * 64];
         let n = match self.file.read(&mut buf) {
@@ -235,7 +255,8 @@ impl EvdevDevice {
                 (EV_SYN, SYN_DROPPED) => Some(RawEvent::Dropped),
                 _ => None,
             };
-            out.extend(decoded);
+            let ms = ev.time.tv_sec as u64 * 1000 + ev.time.tv_usec as u64 / 1000;
+            out.extend(decoded.map(|d| (self.monotonic.then_some(ms), d)));
         }
         Ok(out)
     }
