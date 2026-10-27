@@ -629,6 +629,18 @@ run_orientation() {
     bar "^New$"; sleep 0.5; bar_item "^Note$"
     wait_long has_class pda-notes; bar "^Done$"
     check "reopened Notes lists the note" wait_n 50 found pda-notes "list item" "^buy milk$"
+    # A second launch of Calendar (New > Event again) keeps the open form.
+    bar "^Today$"; wait_for showing_desktop 1
+    bar "^New$"; sleep 0.5; bar_item "^Event$"
+    wait_long found pda-calendar "check box" "^All day$"
+    bar "keyboard"; wait_n 50 found pda-shell button "^space$" --frame "^Input panel$"
+    sip o n e
+    bar "keyboard"
+    bar "^Today$"; wait_for showing_desktop 1
+    bar "^New$"; sleep 0.5; bar_item "^Event$"
+    check "New > Event while a form is open keeps that event first" wait_for bash -c "grep -q '^SUMMARY:one' '$cal'/*.ics"
+    check "and opens an empty form" wait_n 50 calendar_title_is ""
+    bar "^Cancel$"
     # An event left half-done is kept when the session ends (step 5).
     bar "^Today$"; wait_for showing_desktop 1
     bar "^New$"; sleep 0.5; bar_item "^Event$"

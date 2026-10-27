@@ -302,4 +302,18 @@ mod tests {
         assert_eq!(duration_minutes("1H"), None);
         assert_eq!(duration_minutes("PT1X"), None);
     }
+
+    #[test]
+    fn saving_a_repeating_event_keeps_its_exceptions() {
+        let text = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:r1\r\nSUMMARY:Weekly\r\nDTSTART:20261027T090000\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:r1\r\nRECURRENCE-ID:20261103T090000\r\nSUMMARY:Moved\r\nDTSTART:20261103T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let cal = &ical::parse(text).unwrap()[0];
+        let mut e = Event::from_calendar(Path::new("/tmp/r1.ics"), cal).unwrap().remove(0);
+        e.summary = "Weekly sync".into();
+        let out = e.to_calendar(zones().now_utc());
+        let events: Vec<_> = out.children.iter().filter(|c| c.kind == "VEVENT").collect();
+        assert_eq!(events.len(), 2, "{}", ical::write(&out));
+        assert_eq!(events[0].text("SUMMARY").as_deref(), Some("Weekly sync"));
+        assert!(events[1].prop("RECURRENCE-ID").is_some());
+        assert_eq!(events[1].text("SUMMARY").as_deref(), Some("Moved"));
+    }
 }

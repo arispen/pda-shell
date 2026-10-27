@@ -464,7 +464,32 @@ impl Tasks {
         });
     }
 
+    /// Before the form shows another task (a second launch reuses this
+    /// program): keep the task being edited if it changed, like closing
+    /// does. False, and the form stays with the reason, if it cannot be kept.
+    fn settle_form(&self) -> bool {
+        if self.view.get() != View::Edit || !self.dirty.get() {
+            return true;
+        }
+        match self.form_task().and_then(|x| self.save(&x)) {
+            Ok(()) => {
+                self.dirty.set(false);
+                self.reload();
+                true
+            }
+            Err(why) => {
+                self.f_error.set_text(&why);
+                self.f_error.set_visible(true);
+                self.ask.tell("Finish or cancel the task being edited first.");
+                false
+            }
+        }
+    }
+
     fn open_uid(&self, uid: &str) {
+        if !self.settle_form() {
+            return;
+        }
         let task = self.tasks.borrow().iter().find(|t| t.uid == uid).cloned();
         match task {
             Some(task) => self.edit(task, false),
@@ -473,6 +498,9 @@ impl Tasks {
     }
 
     fn open_file(&self, path: &Path) {
+        if !self.settle_form() {
+            return;
+        }
         self.reload();
         let task = self.tasks.borrow().iter().find(|t| t.path == path).cloned();
         match task {
@@ -482,6 +510,9 @@ impl Tasks {
     }
 
     fn new_task(&self) {
+        if !self.settle_form() {
+            return;
+        }
         let task = Task::new(pim::new_uid(), String::new(), &self.dir);
         self.edit(task, true);
     }

@@ -110,6 +110,18 @@ pub fn unique_name(dir: &Path, base: &str) -> String {
     (2..).map(|i| format!("{base} {i}")).find(|n| !dir.join(n).exists()).expect("a free name")
 }
 
+/// Whether renaming `from` to `to` would replace another item. A name that
+/// differs only in case is the item itself on a case-insensitive file
+/// system, but may be a different item on a case-sensitive one.
+pub fn rename_would_replace(from: &Path, to: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::symlink_metadata(from), std::fs::symlink_metadata(to)) {
+        (Ok(a), Ok(b)) => (a.dev(), a.ino()) != (b.dev(), b.ino()),
+        (_, Ok(_)) => true,
+        (_, Err(_)) => false,
+    }
+}
+
 /// "1 item", "3 items".
 pub fn items(n: usize) -> String {
     if n == 1 {
@@ -847,9 +859,7 @@ impl Files {
                 return;
             }
             let target = path.with_file_name(&name);
-            // Renaming only the case of a name is fine on any file system.
-            let same = name.to_lowercase() == current.to_lowercase();
-            if std::fs::symlink_metadata(&target).is_ok() && !same {
+            if rename_would_replace(&path, &target) {
                 f.ask.tell(&format!("“{name}” exists already. Nothing was renamed."));
                 return;
             }
@@ -1025,6 +1035,7 @@ impl Files {
             End(FindEnd),
         }
         let (tx, rx) = async_channel::unbounded::<Msg>();
+        let mine = cancel.clone();
         std::thread::spawn(move || {
             let mut batch = Vec::new();
             let mut last = std::time::Instant::now();
@@ -1043,6 +1054,15 @@ impl Files {
             let mut count = 0;
             while let Ok(msg) = rx.recv().await {
                 let Some(f) = this() else { return };
+                // A newer search (or leaving Find) replaced this one: its
+                // late results and end must not touch the page.
+                let current = f.find_cancel.borrow().as_ref().is_some_and(|c| Arc::ptr_eq(c, &mine));
+                if !current {
+                    if f.find_cancel.borrow().is_none() {
+                        f.find_button.set_sensitive(true);
+                    }
+                    return;
+                }
                 match msg {
                     Msg::Found(paths) => {
                         for p in paths.into_iter().filter_map(info) {
@@ -1207,5 +1227,25 @@ mod tests {
         let many: Vec<_> = (0..6).map(|i| (PathBuf::from(format!("{i}")), "x".to_string())).collect();
         let m = paste_message(Mode::Copy, &Report { cancelled: true, ..Default::default() }, &many).unwrap();
         assert!(m.starts_with("Copied 0 items.") && m.ends_with("and 3 more."), "{m}");
+    }
+
+    #[test]
+    fn renaming_never_replaces_another_item() {
+        let dir = std::env::temp_dir().join(format!("pda-files-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("report.txt"), "a").unwrap();
+        std::fs::write(dir.join("other.txt"), "b").unwrap();
+        assert!(rename_would_replace(&dir.join("report.txt"), &dir.join("other.txt")));
+        assert!(!rename_would_replace(&dir.join("report.txt"), &dir.join("new.txt")));
+        // The item itself (a case-only rename on a case-insensitive file
+        // system resolves to the same file) is not a collision.
+        assert!(!rename_would_replace(&dir.join("report.txt"), &dir.join("report.txt")));
+        // On a case-sensitive file system REPORT.TXT is another file.
+        std::fs::write(dir.join("REPORT.TXT"), "c").unwrap();
+        if std::fs::read_to_string(dir.join("report.txt")).unwrap() == "a" {
+            assert!(rename_would_replace(&dir.join("report.txt"), &dir.join("REPORT.TXT")));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

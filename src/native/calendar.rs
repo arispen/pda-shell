@@ -516,7 +516,32 @@ impl Calendar {
         self.note.set_visible(!note.is_empty());
     }
 
+    /// Before the form shows another event (a second launch reuses this
+    /// program): keep the event being edited if it changed, like closing
+    /// does. False, and the form stays with the reason, if it cannot be kept.
+    fn settle_form(&self) -> bool {
+        if self.view.get() != View::Edit || !self.dirty.get() {
+            return true;
+        }
+        match self.form_event().and_then(|x| self.save(&x)) {
+            Ok(()) => {
+                self.dirty.set(false);
+                self.reload();
+                true
+            }
+            Err(why) => {
+                self.f_error.set_text(&why);
+                self.f_error.set_visible(true);
+                self.ask.tell("Finish or cancel the event being edited first.");
+                false
+            }
+        }
+    }
+
     fn open_uid(&self, uid: &str) {
+        if !self.settle_form() {
+            return;
+        }
         let ev = self.events.borrow().iter().find(|e| e.uid == uid).cloned();
         match ev {
             Some(ev) => self.edit(Some(ev)),
@@ -525,6 +550,9 @@ impl Calendar {
     }
 
     fn open_file(&self, path: &std::path::Path) {
+        if !self.settle_form() {
+            return;
+        }
         self.reload();
         let ev = self.events.borrow().iter().find(|e| e.path == path).cloned();
         match ev {
@@ -537,6 +565,9 @@ impl Calendar {
     }
 
     fn new_event(&self) {
+        if !self.settle_form() {
+            return;
+        }
         let now = LocalZones.now();
         let start = if self.day.get() == now.date {
             // The next full hour.

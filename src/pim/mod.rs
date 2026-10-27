@@ -114,8 +114,14 @@ pub fn wrap(child: ical::Component, original: Option<&ical::Component>) -> ical:
         c.props.push(ical::Property::new("PRODID", "-//pda-shell//POC 0.5//EN"));
         c
     });
-    cal.children.retain(|c| c.kind != child.kind);
-    cal.children.push(child);
+    // Replace only the item itself: overridden occurrences of a repeating
+    // event (same UID with RECURRENCE-ID) and anything else stay.
+    let uid = child.text("UID");
+    let is_master = |c: &ical::Component| c.kind == child.kind && c.text("UID") == uid && c.prop("RECURRENCE-ID").is_none();
+    match cal.children.iter().position(is_master) {
+        Some(i) => cal.children[i] = child,
+        None => cal.children.push(child),
+    }
     cal
 }
 
