@@ -22,17 +22,26 @@ this panel: the screen size is read at start-up and every measurement lives in
   compare on the real 237 ppi panel with a stylus, together with the
   programs' session-wide scale (`app_dpi`); physical sizes are in
   [ergonomics.md](ergonomics.md) and live in Settings → System → Screen.
-- **Touch input path.** The USB resistive controller should appear as an
-  evdev absolute pointer. Expected steps when it arrives:
-  1. Identify it with `libinput list-devices` / `evtest`.
-  2. Calibrate (libinput calibration matrix via a udev rule or
-     `xinput set-prop … "libinput Calibration Matrix"`), including the
-     rotation matrix for the chosen orientation.
-  3. Map it to the HDMI output (`xinput map-to-output`).
-  4. Repeat the manual usability test (docs: Milestone 7) with the stylus.
-- **System-wide long press.** Requires the separate translation daemon
-  described in `architecture.md` (evdev in → recognizer → uinput out). It
-  should grab only the touchscreen device.
+- **Touch input path** (POC 0.4: implemented, not yet tried with the
+  panel). The USB resistive controller should appear as an evdev absolute
+  device:
+  1. `pda-device inputs` (or `libinput list-devices`, `evtest`) lists it
+     and says whether the daemon would take it; note vendor:product.
+  2. `config/device/70-pda-touchscreen.rules` gives it the stable name
+     `/dev/input/pda-touchscreen` (installed by `install-device.sh`); with
+     more than one touchscreen put its ids in the rule and set
+     `[stylus] device`.
+  3. The session maps it to the screen with the xrandr rotation (portrait
+     turns it too) and starts `pda-device stylus`, which adds
+     hold-to-right-click for every program.
+  4. Settings → Stylus (`pda-device calibrate`): tap five crosses near the
+     corners and the centre; the result is saved per user and the daemon
+     reloads it.
+  5. Repeat the checklist with the stylus ([device-checklist.md](device-checklist.md)).
+- **System-wide long press** (POC 0.4): `pda-device stylus`, see
+  `architecture.md`. It grabs only the touchscreen; tested against a fake
+  uinput touchscreen and mouse on a real kernel (`scripts/stylus-test.sh`),
+  not with a pen.
 - **Rotation at runtime** (if the device gets an orientation sensor): needs
   RandR rotation plus touch matrix updates without restarting the session.
 - **Power, battery, suspend:** out of scope for POC 0.1. The status bar shows
@@ -54,6 +63,7 @@ Evidence so far (keep these apart):
 | Kind | Status |
 |---|---|
 | Simulated (Xvfb, Debian 13 arm64 container) | device session at 1024×600, 600×1024, 800×480: start, crash recovery, End session (`scripts/device-test.sh`) |
+| Real kernel, synthetic device (uinput in the Docker VM) | stylus daemon: tap, hold → right click, jitter, drag, double tap, unplug/replug, grab exclusivity, mouse left alone (`scripts/stylus-test.sh`) |
 | arm64 on the real board | **not yet** |
 | Panel with stylus | **not yet** |
 

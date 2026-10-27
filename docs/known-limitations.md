@@ -34,9 +34,28 @@ the issue asks for hardware.
 | P0 device | Output, mode and rotation from xrandr and `[device]`; 1024×600, 600×1024 and 800×480 without hard-coded positions | **unit-tested** (xrandr parsing, plans for landscape/portrait panels, missing outputs/modes), **automated, simulated** (layout at the three sizes); real rotation **unverified** (Xvfb cannot rotate) |
 | P0 device | Startup timing logged; crashed shell restarted with programs kept; crash loop ends the session; End session keeps save prompts; nothing left running | **automated, simulated** |
 | P0 device | Boot success and startup time on the board | **not done** (no board results) |
+| P0 stylus | Touchscreen chosen by stable identity (udev symlink, `usb:VVVV:PPPP`, name or auto), never a mouse, keyboard or the daemon's own pointer | **unit-tested** (device choice), **automated, real kernel + synthetic device** (`stylus-test.sh`: fake mouse left alone, own pointer refused); USB panel **unverified** |
+| P0 stylus | System-wide hold → right click (`pda-device stylus`, evdev grab + uinput pointer), tap/hold/drag distinguished, no left click after a hold, drags and double taps intact | **unit-tested** (jitter, hold threshold, late tick, drag cancel, drag held still, double tap, SYN_DROPPED, removal), **automated, real kernel + synthetic device** (24 checks incl. grab exclusivity, unplug/replug, SIGTERM); in Gnumeric/Firefox with a pen **unverified** (Xvfb has no evdev input) |
+| P0 stylus | Calibration (five taps, per-user file, composed with the rotation) and the X fallback mapping without the daemon | **unit-tested** (fit, rotations, composition), **automated, simulated** (calibration screen with offset taps, cancel restores); on the panel **unverified** |
 | P1 measurements | `device-bench.sh`: startup, idle/active memory and CPU, Gnumeric/Firefox launch latency, system report | script **automated, simulated**; board numbers **not done** |
 | P1 power | `pda-device info`: backlight, sleep states, power supplies, power key; DPMS blanking | report **demonstrated** (container); suspend, power draw **not done** |
 | P1 | Physical checklist with pass/fail ([device-checklist.md](device-checklist.md)) | written, **not filled in** |
+
+### POC 0.4 stylus limitations
+
+- With the daemon running, shell widgets get a hold as a right click: the
+  Pocket PC ring of dots no longer builds up (GTK never sees the held
+  left button). Other programs never had it. A system-wide progress
+  indicator would need the daemon to tell the shell where the stylus is.
+- Holding still on a scroll bar arrow or a button that repeats while held
+  becomes a right click after `long_press_ms`; drag the thumb instead, or
+  set `[stylus] right_click = false`.
+- A tap is sent when the stylus lifts, so buttons react on release (as on
+  Pocket PC); a drag starts only after the 8 px slop.
+- The session user can create input devices (`/dev/uinput` for the
+  `input` group); acceptable on a single-user device.
+- Single-touch only; multitouch slots of a capacitive panel are read as
+  one point.
 
 ### POC 0.4 device-session limitations
 

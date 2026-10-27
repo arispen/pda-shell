@@ -1,3 +1,49 @@
+# POC 0.4 test results: system-wide stylus input (issue #7, Milestone 4)
+
+Date: 2026-10-27. Same container as the device session below. **No pen and
+no panel**: the daemon ran on the Docker VM's real Linux kernel (6.8,
+arm64) against touchscreens and mice created with uinput.
+
+| Test | Command | Result |
+|---|---|---|
+| Unit and integration tests | `cargo test` | 149 + 1 passed |
+| Stylus daemon, real kernel, synthetic devices | `./scripts/container.sh uinput ./scripts/stylus-test.sh` | 24 passed, 0 failed (two runs) |
+| Device session incl. calibration screen | `./scripts/device-test.sh` | 80 passed, 0 failed |
+| Shell smoke test (regression) | `./scripts/smoke-test.sh` | 68 passed, 0 failed |
+
+`stylus-test.sh` plays gestures on a fake 4096×4096 resistive touchscreen
+(`scripts/lib/fake_input.py`) and reads what the daemon's virtual pointer
+emits: a tap is one left click at the tapped position; a 900 ms hold is a
+right click and no left click, also with ±4 px jitter; a short tap with
+jitter stays a left click; a drag presses where the stylus went down and
+releases where it left; a drag held still for 1.5 s never becomes a right
+click; a double tap is two left clicks; unplugging the touchscreen mid-drag
+releases the left button, and taps work again after replugging; while the
+daemon runs another reader of the touchscreen gets nothing (EVIOCGRAB); a
+fake USB mouse keeps working and is never taken; `pda-device inputs`
+refuses the daemon's own pointer and the VM's "Apple Virtual USB
+Digitizer" (absolute and relative axes); SIGTERM exits with 0, the virtual
+pointer disappears and the touchscreen is readable again; with
+`right_click = false` a hold is a long left press.
+
+The calibration screen (`pda-device calibrate`) was driven with taps 20 px
+right of and 10 px below each cross: the saved matrix shifts by −0.0186
+and −0.0167 (20/1024 and 10/600), residual 0.0 %; Cancel or SIGTERM
+restores the previous file.
+
+Found and fixed while testing:
+
+- An empty `XDG_CONFIG_HOME` was taken as a relative directory: the
+  calibration landed in the current directory. Empty now means unset.
+- Closing the calibration window from outside (SIGTERM) left the identity
+  calibration in place; it now quits normally and restores the previous one.
+
+Not shown by these tests: whether X delivers the virtual pointer's right
+click to Gnumeric, Firefox, Thunar and Files as a context menu (Xvfb has
+no evdev input), calibration accuracy of the real resistive panel, and the
+hold timing that feels right with a pen. Those are rows S2–S7 of
+[device-checklist.md](device-checklist.md).
+
 # POC 0.4 test results: device session (issue #7)
 
 Date: 2026-10-27. Environment: the Debian 13 arm64 development container

@@ -22,6 +22,7 @@ pub struct Config {
     pub start_menu: StartMenuConfig,
     pub windows: WindowsConfig,
     pub device: DeviceConfig,
+    pub stylus: StylusConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -175,6 +176,28 @@ pub struct DeviceConfig {
     pub screen_off_minutes: u32,
 }
 
+/// The system-wide stylus daemon (`pda-device stylus`). The hold time and
+/// slop come from `[input]`, the same as inside the shell.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct StylusConfig {
+    /// The touchscreen: "auto" (the only touchscreen-like device), a path
+    /// (the udev symlink /dev/input/pda-touchscreen), "usb:VVVV:PPPP", or
+    /// part of the device name. Mice and keyboards are never taken.
+    pub device: String,
+    /// Holding the stylus still right-clicks in every program.
+    pub right_click: bool,
+    /// libinput-style calibration matrix [a, b, c, d, e, f] in the panel's
+    /// own orientation; `pda-device calibrate` saves a per-user one.
+    pub calibration: Vec<f64>,
+}
+
+impl Default for StylusConfig {
+    fn default() -> Self {
+        Self { device: "auto".into(), right_click: true, calibration: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0] }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -186,6 +209,7 @@ impl Default for Config {
             start_menu: StartMenuConfig::default(),
             windows: WindowsConfig::default(),
             device: DeviceConfig::default(),
+            stylus: StylusConfig::default(),
         }
     }
 }
@@ -509,5 +533,15 @@ mod tests {
         assert_eq!(cfg.device.output, "auto");
         let shipped = Config::parse_with_density(include_str!("../config/pda-shell.toml"), None).unwrap();
         assert_eq!(shipped.device.orientation, DeviceOrientation::Landscape, "landscape is the primary orientation");
+    }
+
+    #[test]
+    fn stylus_section() {
+        let cfg = Config::parse_with_density("[stylus]\nright_click = false\ndevice = \"usb:0eef:0001\"\n", None).unwrap();
+        assert!(!cfg.stylus.right_click);
+        assert_eq!(cfg.stylus.device, "usb:0eef:0001");
+        assert_eq!(cfg.stylus.calibration, StylusConfig::default().calibration);
+        let shipped = Config::parse_with_density(include_str!("../config/pda-shell.toml"), None).unwrap();
+        assert_eq!(shipped.stylus, StylusConfig::default());
     }
 }

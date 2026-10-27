@@ -7,6 +7,9 @@
 #   ./scripts/container.sh ./scripts/smoke-test.sh
 #   ./scripts/container.sh vnc portrait          # session viewable on vnc://localhost:5900
 #                                                # (password "pda", or $PDA_VNC_PASSWORD)
+#   ./scripts/container.sh uinput ./scripts/stylus-test.sh
+#                                                # as root with /dev/uinput and /dev/input
+#                                                # (the Docker VM's kernel), for the stylus test
 #   ./scripts/container.sh                       # interactive shell
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,6 +33,14 @@ if [ "${1:-}" = "vnc" ]; then
         mkdir -p /tmp/vnc && x11vnc -storepasswd \"\$PDA_VNC_PASSWORD\" /tmp/vnc/passwd >/dev/null 2>&1
         x11vnc -display :1 -forever -rfbauth /tmp/vnc/passwd -quiet -rfbport 5900 -o /tmp/x11vnc.log &
         DISPLAY=:1 ./scripts/dev-session.sh --orientation $orientation"
+fi
+
+if [ "${1:-}" = "uinput" ]; then
+    shift
+    # Input devices created with uinput appear in the VM's /dev/input;
+    # character major 13 is the input subsystem.
+    exec "${run[@]}" -u root --device /dev/uinput -v /dev/input:/dev/input --device-cgroup-rule 'c 13:* rmw' \
+        "$IMAGE" "$@"
 fi
 
 if [ $# -eq 0 ]; then set -- bash; fi

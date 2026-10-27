@@ -63,7 +63,8 @@ if ! id "$USER_NAME" >/dev/null 2>&1; then
     say "creating user $USER_NAME"
     useradd -m -s /bin/bash "$USER_NAME"
 fi
-# video/render: the display; input: touchscreen tools (evtest) for this user.
+# video/render: the display; input: the touchscreen and /dev/uinput for the
+# stylus daemon (see config/device/70-pda-touchscreen.rules).
 for g in video render input audio; do
     getent group "$g" >/dev/null && usermod -aG "$g" "$USER_NAME"
 done
@@ -89,6 +90,15 @@ if [ "$SAMPLES" -eq 1 ]; then
     runuser -u "$USER_NAME" -- bash -c "mkdir -p '$USER_HOME/Documents' && cp -Rn '$PREFIX/assets/sample-files/.' '$USER_HOME/Documents/'"
     say "copied the sample documents to $USER_HOME/Documents"
 fi
+
+# --- stylus input ------------------------------------------------------------------
+# /dev/uinput for the session user (input group), loaded at boot, and the
+# /dev/input/pda-touchscreen symlink.
+install -m 644 "$REPO/config/device/70-pda-touchscreen.rules" /etc/udev/rules.d/70-pda-touchscreen.rules
+install -m 644 "$REPO/config/device/uinput.conf" /etc/modules-load.d/pda-shell-uinput.conf
+modprobe uinput 2>/dev/null || say "could not load the uinput module now (it loads at the next boot)"
+udevadm control --reload-rules && udevadm trigger --subsystem-match=input --subsystem-match=misc
+say "installed udev rules for the touchscreen and /dev/uinput"
 
 # --- systemd -------------------------------------------------------------------------
 UNIT=/etc/systemd/system/pda-shell-session.service

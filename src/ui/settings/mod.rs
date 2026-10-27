@@ -109,6 +109,8 @@ impl Settings {
             vec![
                 item("pda-about", "About", Command::Shell(Event::ShowPage(Page::About))),
                 item("pda-screen", "Screen", Command::Shell(Event::ShowPage(Page::Screen))),
+                // pda-device calibrate (config/share/applications).
+                item("pda-input", "Stylus", Command::Shell(Event::Launch("pda-calibrate.desktop".into()))),
                 item("pda-tools", "Linux settings", Command::Shell(Event::ShowPage(Page::LinuxSettings))),
                 item("pda-power", "End session", Command::Shell(Event::EndSession)),
             ],
